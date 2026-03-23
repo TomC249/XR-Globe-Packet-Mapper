@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NetGlobe — Network Traffic Visualiser</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #000;
+      overflow: hidden;
+      font-family: 'Courier New', monospace;
+    }
+
+    #render-canvas {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      touch-action: none;
+    }
+
+    /* ── HUD overlay ─────────────────────────────────────────── */
+    #hud {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    #top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 24px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, transparent 100%);
+    }
+
+    .logo {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.2em;
+      color: #00e5ff;
+      text-transform: uppercase;
+    }
+
+    .logo span { color: #ffffff; opacity: 0.5; }
+
+    #connection-status {
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      padding: 4px 10px;
+      border-radius: 2px;
+      border: 1px solid currentColor;
+    }
+
+    #connection-status.connected    { color: #00ff9d; }
+    #connection-status.connecting   { color: #ffc400; }
+    #connection-status.disconnected { color: #ff4444; }
+
+    /* ── Stats panel (bottom-left) ───────────────────────────── */
+    #stats-panel {
+      position: fixed;
+      bottom: 24px;
+      left: 24px;
+      background: rgba(0, 0, 0, 0.6);
+      border: 1px solid rgba(0, 229, 255, 0.2);
+      border-radius: 4px;
+      padding: 14px 18px;
+      min-width: 200px;
+      pointer-events: none;
+    }
+
+    #stats-panel h3 {
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      color: rgba(0, 229, 255, 0.5);
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+      gap: 24px;
+    }
+
+    .stat-label {
+      font-size: 11px;
+      color: rgba(255,255,255,0.4);
+      letter-spacing: 0.08em;
+    }
+
+    .stat-value {
+      font-size: 13px;
+      font-weight: 700;
+      color: #ffffff;
+      letter-spacing: 0.06em;
+    }
+
+    /* ── Legend (bottom-right) ───────────────────────────────── */
+    #legend {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: rgba(0,0,0,0.6);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 4px;
+      padding: 14px 18px;
+      pointer-events: none;
+    }
+
+    #legend h3 {
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      color: rgba(255,255,255,0.3);
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+
+    .legend-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .legend-label {
+      font-size: 11px;
+      color: rgba(255,255,255,0.5);
+      letter-spacing: 0.06em;
+    }
+
+    /* ── Tooltip ─────────────────────────────────────────────── */
+    #tooltip {
+      position: fixed;
+      background: rgba(0,0,0,0.85);
+      border: 1px solid rgba(0, 229, 255, 0.4);
+      border-radius: 4px;
+      padding: 10px 14px;
+      font-size: 11px;
+      color: #fff;
+      pointer-events: none;
+      display: none;
+      z-index: 20;
+      max-width: 220px;
+      line-height: 1.7;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="render-canvas"></canvas>
+
+  <div id="hud">
+    <div id="top-bar">
+      <div class="logo">Net<span>Globe</span></div>
+      <div id="connection-status" class="connecting">● CONNECTING</div>
+    </div>
+  </div>
+
+  <div id="stats-panel">
+    <h3>Live Stats</h3>
+    <div class="stat-row">
+      <span class="stat-label">Active arcs</span>
+      <span class="stat-value" id="stat-arcs">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Total flows</span>
+      <span class="stat-value" id="stat-flows">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Data rate</span>
+      <span class="stat-value" id="stat-rate">0 B/s</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">FPS</span>
+      <span class="stat-value" id="stat-fps">0</span>
+    </div>
+  </div>
+
+  <div id="legend">
+    <h3>Protocol</h3>
+    <div class="legend-item"><div class="legend-dot" style="background:#00e5ff"></div><span class="legend-label">TCP</span></div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ffa726"></div><span class="legend-label">UDP</span></div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ef5350"></div><span class="legend-label">ICMP</span></div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ab47bc"></div><span class="legend-label">DNS</span></div>
+    <div class="legend-item"><div class="legend-dot" style="background:#66bb6a"></div><span class="legend-label">HTTP/S</span></div>
+    <div class="legend-item"><div class="legend-dot" style="background:#546e7a"></div><span class="legend-label">Other</span></div>
+  </div>
+
+  <div id="tooltip"></div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

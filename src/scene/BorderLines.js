@@ -1,131 +1,108 @@
 /**
  * BorderLines.js
- * Fetches the world country borders GeoJSON and draws them as
- * line meshes projected onto the globe surface.
- *
- * GeoJSON source: Natural Earth via unpkg (public domain).
- * Each polygon ring is converted to a series of lat/lon → Vector3
- * points and drawn with CreateLines.
+ * Uses a land mask texture (white=land, black=ocean) to place dots.
+ * Cost per dot = one array lookup. No polygon math at all.
  */
-import { MeshBuilder, StandardMaterial, Color3, Vector3 } from '@babylonjs/core';
+import { MeshBuilder, StandardMaterial, Color3 } from '@babylonjs/core';
 import { latLonToVec3 } from './NetworkArcs.js';
 
-// Free, lightweight 50m borders (~550 KB). Swap for a 10m version for more detail.
-const BORDERS_URL =
-  'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-50m.json';
+// 2048x1024 land mask — white pixels = land, black = ocean
+// Natural Earth public domain
+const LAND_MASK_URL  = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geotiff/ne_110m_land.png';
 
-const BORDER_COLOR     = new Color3(0.3, 0.55, 0.7);
-const BORDER_ALPHA     = 0.45;
-const SURFACE_OFFSET   = 0.01; // push lines just above the sphere to prevent z-fighting
+// Fallback — simpler 1024x512 mask from unpkg
+const LAND_MASK_FALLBACK = 'https://unpkg.com/three-globe@2.31.0/example/img/earth-water.png';
+
+const SURFACE_OFFSET = 0.015;
+const DOT_RADIUS     = 0.012;
+const DOT_SEGMENTS   = 4;
+const DOT_COLOR      = new Color3(0.25, 0.5, 1.0);
+const DOT_EMISSIVE   = new Color3(0.1, 0.25, 0.6);
+const LAT_STEP       = 0.8;
+const LAND_THRESHOLD = 100;  // 0-255 — pixels brighter than this = land
+
 
 export class BorderLines {
-  /**
-   * Fetch borders GeoJSON and create line meshes in the scene.
-   * Static factory — call once at init.
-   */
-  static async load(scene, radius) {
-    let topology;
-    try {
-      const res = await fetch(BORDERS_URL);
-      topology  = await res.json();
-    } catch (err) {
-      console.warn('[BorderLines] Failed to fetch border data:', err);
+  static async load(scene, radius, globeMesh) {
+    // ── 1. Fetch and decode the mask into a pixel array ─────────────────
+    const pixels = await BorderLines.#loadMaskPixels(LAND_MASK_FALLBACK);
+    if (!pixels) {
+      console.warn('[BorderLines] Could not load land mask.');
       return;
     }
 
-    // world-atlas ships as TopoJSON — decode to GeoJSON polygons
-    const features = BorderLines.#decodeTopojson(topology);
+    const { data, width, height } = pixels;
+
+    // ── 2. Helper: is this lat/lon on land? ─────────────────────────────
+    const isLand = (lat, lon) => {
+      // Map lat/lon to pixel coordinates
+      const px = Math.floor(((lon + 180) / 360) * width)  % width;
+      const py = Math.floor(((90 - lat)  / 180) * height) % height;
+      const idx = (py * width + px) * 4;  // RGBA
+
+      // earth-water.png: dark = land, bright = water — so we invert
+      // If using a true land mask (white=land), remove the inversion
+      const r = data[idx];
+      return r < LAND_THRESHOLD;  // dark pixel = land in this texture
+    };
+
+    // ── 3. Shared dot material ───────────────────────────────────────────
+    const mat = new StandardMaterial('dotMat', scene);
+    mat.diffuseColor    = DOT_COLOR;
+    mat.emissiveColor   = DOT_EMISSIVE;
+    mat.specularColor   = new Color3(0, 0, 0);
+    mat.freeze();  // static material — lock it for GPU perf
+
     const r = radius + SURFACE_OFFSET;
+    let dotCount = 0;
 
-    // Shared material for all border lines
-    const mat = new StandardMaterial('bordersMat', scene);
-    mat.emissiveColor = BORDER_COLOR;
-    mat.disableLighting = true;
-    mat.alpha = BORDER_ALPHA;
+    // ── 4. Walk the grid and place dots ──────────────────────────────────
+    for (let lat = -90; lat <= 90; lat += LAT_STEP) {
+      const cosLat  = Math.max(Math.cos(lat * Math.PI / 180), 0.08);
+      const lonStep = LAT_STEP / cosLat;  // widen spacing near poles
 
-    let lineCount = 0;
+      for (let lon = -180; lon < 180; lon += lonStep) {
+        if (!isLand(lat, lon)) continue;
 
-    for (const feature of features) {
-      const { type, coordinates } = feature.geometry;
-      const rings =
-        type === 'Polygon' ? coordinates :
-        type === 'MultiPolygon' ? coordinates.flat(1) : [];
+        const pos = latLonToVec3(lat, lon, r);
 
-      for (const ring of rings) {
-        const pts = ring.map(([lon, lat]) => latLonToVec3(lat, lon, r));
-        if (pts.length < 2) continue;
+        const dot = MeshBuilder.CreateSphere(`dot_${dotCount++}`, {
+          diameter:  DOT_RADIUS * 2,
+          segments:  DOT_SEGMENTS,
+          updatable: false,
+        }, scene);
 
-        const line = MeshBuilder.CreateLines(
-          `border_${lineCount++}`,
-          { points: pts, updatable: false },
-          scene,
-        );
-        line.color    = BORDER_COLOR;
-        line.alpha    = BORDER_ALPHA;
-        line.isPickable = false;
-        // Freeze transform since borders never move (perf optimisation)
-        line.freezeWorldMatrix();
+        dot.position   = pos;
+        dot.material   = mat;
+        dot.isPickable = false;
+        dot.parent     = globeMesh;
       }
     }
 
-    console.log(`[BorderLines] Drew ${lineCount} border segments.`);
+    console.log(`[BorderLines] Placed ${dotCount} land dots.`);
   }
 
-  // ── TopoJSON decoder (minimal, no external dependency) ──────────────────
+  // ── Fetch image and extract pixel data via OffscreenCanvas ───────────────
 
-  static #decodeTopojson(topology) {
-    // Supports only the 'countries' layer from world-atlas
-    const object = topology.objects.countries;
-    if (!object) return [];
+  static async #loadMaskPixels(url) {
+    try {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const bitmap = await createImageBitmap(blob);
 
-    const { scale, translate } = topology.transform;
-    const arcs = topology.arcs;
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const ctx    = canvas.getContext('2d');
+      ctx.drawImage(bitmap, 0, 0);
 
-    // Decode a single arc index list to [lon, lat] coordinates
-    const decodeArc = (arcIdx) => {
-      const reversed = arcIdx < 0;
-      const idx      = reversed ? ~arcIdx : arcIdx;
-      const raw      = arcs[idx];
-
-      let x = 0, y = 0;
-      const pts = raw.map(([dx, dy]) => {
-        x += dx; y += dy;
-        return [
-          x * scale[0] + translate[0],
-          y * scale[1] + translate[1],
-        ];
-      });
-
-      return reversed ? pts.reverse() : pts;
-    };
-
-    const decodeRing = (ring) => {
-      const coords = ring.flatMap(decodeArc);
-      // Close the ring
-      if (coords.length > 0) coords.push(coords[0]);
-      return coords;
-    };
-
-    const features = [];
-
-    for (const geom of object.geometries) {
-      if (geom.type === 'Polygon') {
-        features.push({
-          geometry: {
-            type: 'Polygon',
-            coordinates: geom.arcs.map(decodeRing),
-          },
-        });
-      } else if (geom.type === 'MultiPolygon') {
-        features.push({
-          geometry: {
-            type: 'MultiPolygon',
-            coordinates: geom.arcs.map((poly) => poly.map(decodeRing)),
-          },
-        });
-      }
+      const imageData = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+      return {
+        data:   imageData.data,
+        width:  bitmap.width,
+        height: bitmap.height,
+      };
+    } catch (err) {
+      console.error('[BorderLines] Mask load failed:', err);
+      return null;
     }
-
-    return features;
   }
 }

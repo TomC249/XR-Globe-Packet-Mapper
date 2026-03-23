@@ -42,7 +42,7 @@ GEOIP_DB_PATH = Path('GeoLite2-City.mmdb')
 TSHARK_BIN   = 'tshark'    # ensure tshark is in your PATH
 TSHARK_IFACE  = 'Ethernet'   # change to your capture interface
 TSHARK_FILTER = 'not (src net 192.168.0.0/16 or src net 10.0.0.0/8 or src net 172.16.0.0/12 or dst net 192.168.0.0/16 or dst net 10.0.0.0/8 or dst net 172.16.0.0/12)'
-PCAP_FILE = r'C:\Users\chamb\projects\XR Globe Packet Mapper\testsample.pcapng'  # update this path
+PCAP_FILE = r'testsample.pcapng'  # update this path
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger('netglobe')

@@ -26,9 +26,9 @@ export const GLOBE_RADIUS = 5;
 
 // Free Earth texture — NASA Blue Marble (public domain).
 // Replace with a local asset for production.
-const EARTH_DAY_TEX   = 'https://cdn.jsdelivr.net/gh/turban/Leaflet.Graticule@master/examples/blue_marble.jpg';
-const EARTH_NIGHT_TEX = 'https://unpkg.com/three-globe@2.31.0/example/img/earth-night.jpg';
-const EARTH_BUMP_TEX  = 'https://unpkg.com/three-globe@2.31.0/example/img/earth-topology.png';
+const EARTH_DAY_TEX  = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r134/examples/textures/planets/earth_atmos_2048.jpg';
+const EARTH_BUMP_TEX = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r134/examples/textures/planets/earth_normal_2048.jpg';
+const EARTH_SPEC_TEX = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r134/examples/textures/planets/earth_specular_2048.jpg';
 
 export class GlobeScene {
   /** @type {Engine} */ engine;
@@ -51,12 +51,12 @@ export class GlobeScene {
     this.#createLights();
     await this.#createGlobe();
     this.#createAtmosphere();
-    this.#createStarfield();
+    //this.#createStarfield();
     this.#setupGlow();
 
     this.arcs = new NetworkArcs(this.scene, GLOBE_RADIUS, this.camera);
 
-    await BorderLines.load(this.scene, GLOBE_RADIUS);
+    await BorderLines.load(this.scene, GLOBE_RADIUS, this.globe);
 
     this.#startRenderLoop();
     this.#handleResize();
@@ -104,29 +104,22 @@ export class GlobeScene {
   #createCamera() {
     this.camera = new ArcRotateCamera(
       'cam',
-      -Math.PI / 2,  // alpha — longitude pan
-      Math.PI / 2.2, // beta  — latitude tilt
-      GLOBE_RADIUS * 2.8, // radius — zoom distance
+      0,              // alpha=0 faces toward lon=0 — Europe/Africa
+      Math.PI / 3,    // beta=60° — looking slightly down from north, Google Earth style
+      GLOBE_RADIUS * 2.8,
       Vector3.Zero(),
       this.scene,
     );
-
+  
     this.camera.attachControl(this.canvas, true);
-
-    // Zoom limits — can't go inside the globe or too far away
     this.camera.lowerRadiusLimit = GLOBE_RADIUS * 1.15;
     this.camera.upperRadiusLimit = GLOBE_RADIUS * 8;
-
-    // Smooth inertia for pan/zoom feel
-    this.camera.inertia = 0.85;
-    this.camera.wheelPrecision = 40;
-    this.camera.pinchPrecision = 60;
-
-    // Clamp vertical rotation so you can't flip upside down
-    this.camera.lowerBetaLimit = 0.2;
-    this.camera.upperBetaLimit = Math.PI - 0.2;
+    this.camera.inertia          = 0.85;
+    this.camera.wheelPrecision   = 40;
+    this.camera.pinchPrecision   = 60;
+    this.camera.lowerBetaLimit   = 0.2;
+    this.camera.upperBetaLimit   = Math.PI - 0.2;
   }
-
   #createLights() {
     // Ambient fill — prevents the dark side from being pitch black
     const ambient = new HemisphericLight(
@@ -154,43 +147,17 @@ export class GlobeScene {
       { diameter: GLOBE_RADIUS * 2, segments: 64 },
       this.scene,
     );
-
+  
     const mat = new StandardMaterial('earthMat', this.scene);
-
-    // Day texture
-    mat.diffuseTexture = new Texture(EARTH_DAY_TEX, this.scene);
-
-    // Bump map for terrain relief
-    mat.bumpTexture = new Texture(EARTH_BUMP_TEX, this.scene);
-    mat.bumpTexture.level = 0.8;
-
-    // Slight specular for ocean glint
-    mat.specularColor = new Color3(0.3, 0.3, 0.4);
-    mat.specularPower = 24;
-
+  
+    // Deep navy base colour
+    mat.diffuseColor  = new Color3(0.2, 0.06, 0.1);
+    mat.emissiveColor = new Color3(0.02, 0.05, 0.18);
+    mat.specularColor = new Color3(0.1, 0.2, 0.5);
+    mat.specularPower = 32;
+  
     this.globe.material = mat;
-
-    // Slow auto-rotation
-    this.scene.registerBeforeRender(() => {
-      this.globe.rotation.y += 0.0003;
-    });
   }
-
-  #createAtmosphere() {
-    // Outer glow shell — slightly larger, semi-transparent blue sphere
-    const atmo = MeshBuilder.CreateSphere(
-      'atmosphere',
-      { diameter: GLOBE_RADIUS * 2.06, segments: 32 },
-      this.scene,
-    );
-
-    const mat = new StandardMaterial('atmoMat', this.scene);
-    mat.emissiveColor = new Color3(0.05, 0.15, 0.5);
-    mat.alpha = 0.08;
-    mat.backFaceCulling = false;
-    atmo.material = mat;
-  }
-
   #createStarfield() {
     // Simple point-based starfield using a large sphere with inverted normals
     const stars = MeshBuilder.CreateSphere(
@@ -210,6 +177,33 @@ export class GlobeScene {
     stars.material = mat;
   }
 
+  #createAtmosphere() {
+  // Inner glow shell
+  const inner = MeshBuilder.CreateSphere(
+    'atmoInner',
+    { diameter: GLOBE_RADIUS * 2.02, segments: 32 },
+    this.scene,
+  );
+  const innerMat = new StandardMaterial('atmoInnerMat', this.scene);
+  innerMat.emissiveColor   = new Color3(0.05, 0.2, 0.8);
+  innerMat.alpha           = 0.08;
+  innerMat.backFaceCulling = false;
+  innerMat.disableLighting = true;
+  inner.material = innerMat;
+
+  // Outer glow halo
+    const outer = MeshBuilder.CreateSphere(
+      'atmoOuter',
+      { diameter: GLOBE_RADIUS * 2.12, segments: 32 },
+      this.scene,
+    );
+    const outerMat = new StandardMaterial('atmoOuterMat', this.scene);
+    outerMat.emissiveColor   = new Color3(0.02, 0.1, 0.6);
+    outerMat.alpha           = 0.05;
+    outerMat.backFaceCulling = false;
+    outerMat.disableLighting = true;
+    outer.material = outerMat;
+  }
   #setupGlow() {
     // Glow layer makes arc lines bloom — crucial for the neon effect
     this.glowLayer = new GlowLayer('glow', this.scene);

@@ -291,15 +291,14 @@ export class NetworkArcs {
 // ── Geometry helpers ──────────────────────────────────────────────────────
 
 export function latLonToVec3(lat, lon, radius) {
-  const phi   = (90 - lat)  * (Math.PI / 180);
+  const phi   = (90 - lat) * (Math.PI / 180);
   const theta = (lon + 180) * (Math.PI / 180);
   return new Vector3(
-    -radius * Math.sin(phi) * Math.cos(theta),
-     radius * Math.cos(phi),
-     radius * Math.sin(phi) * Math.sin(theta),
+    radius * Math.sin(phi) * Math.cos(theta),  // no negative
+    radius * Math.cos(phi),
+    radius * Math.sin(phi) * Math.sin(theta),
   );
 }
-
 export function computeBezierCurve(p0, p2, radius, heightFactor, segments) {
   const mid         = p0.add(p2).scale(0.5);
   const chordLength = Vector3.Distance(p0, p2);

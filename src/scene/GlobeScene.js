@@ -155,6 +155,7 @@ export class GlobeScene {
     mat.emissiveColor = new Color3(0.02, 0.05, 0.18);
     mat.specularColor = new Color3(0.1, 0.2, 0.5);
     mat.specularPower = 32;
+    mat.alpha = 1.0;  // fully opaque
   
     this.globe.material = mat;
   }

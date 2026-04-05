@@ -23,6 +23,7 @@ Usage:
 """
 
 import asyncio
+import argparse
 import json
 import logging
 import sqlite3
@@ -42,7 +43,7 @@ GEOIP_DB_PATH = Path('GeoLite2-City.mmdb')
 TSHARK_BIN   = 'tshark'    # ensure tshark is in your PATH
 TSHARK_IFACE  = 'Ethernet'   # change to your capture interface
 TSHARK_FILTER = 'not (src net 192.168.0.0/16 or src net 10.0.0.0/8 or src net 172.16.0.0/12 or dst net 192.168.0.0/16 or dst net 10.0.0.0/8 or dst net 172.16.0.0/12)'
-PCAP_FILE = r'testsample.pcapng'  # update this path
+PCAP_FILE = r'4SICS-GeekLounge-151021.pcap'  # update this path
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger('netglobe')
@@ -220,15 +221,15 @@ async def broadcast(flow: dict):
     )
 
 # ── tshark subprocess ─────────────────────────────────────────────────────────
-async def run_tshark(db_conn, loop):
+async def run_tshark(db_conn, loop, pcap_file: str):
     cmd = [
         TSHARK_BIN,
-        '-r', PCAP_FILE,     # read from file instead of live interface
+        '-r', pcap_file,     # read from file instead of live interface
         '-T', 'ek',
         '-n',
     ]
 
-    log.info(f'Reading pcap: {PCAP_FILE}')
+    log.info(f'Reading pcap: {pcap_file}')
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -270,7 +271,18 @@ async def run_tshark(db_conn, loop):
     log.info(f'Done. Parsed {packet_count} packets, {flow_count} mappable flows.')
 
 # ── Entry point ───────────────────────────────────────────────────────────────
-async def main():
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description='NetGlobe WebSocket + pcap reader server')
+    parser.add_argument(
+        'pcap_file',
+        nargs='?',
+        default=str(PCAP_FILE),
+        help=f'Path to pcap file (default: {PCAP_FILE})',
+    )
+    return parser.parse_args()
+
+
+async def main(pcap_file: str):
     db_conn = init_db()
     log.info(f'Database: {DB_PATH}')
 
@@ -285,11 +297,12 @@ async def main():
 
     await asyncio.gather(
         server.wait_closed(),
-        run_tshark(db_conn, asyncio.get_event_loop()),
+        run_tshark(db_conn, asyncio.get_event_loop(), pcap_file),
     )
 
 if __name__ == '__main__':
+    args = parse_args()
     try:
-        asyncio.run(main())
+        asyncio.run(main(args.pcap_file))
     except KeyboardInterrupt:
         log.info('Shutting down.')

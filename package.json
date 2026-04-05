@@ -13,11 +13,11 @@
     "@babylonjs/gui": "^7.x",
     "@babylonjs/loaders": "^7.x",
     "@babylonjs/materials": "^7.x",
+    "babylonjs": "^8.56.2",
     "dependencies": "^0.0.1",
+    "deps": "^1.0.0",
     "pip": "^0.0.1",
-    "python": "^0.0.4"
-  },
-  "devDependencies": {
-    "vite": "^5.x"
+    "python": "^0.0.4",
+    "vite": "^8.0.2"
   }
 }

@@ -24,12 +24,10 @@ import { BorderLines } from './BorderLines.js';
 // ── Constants ──────────────────────────────────────────────────────────────
 export const GLOBE_RADIUS = 5;
 
-// Free Earth texture — NASA Blue Marble (public domain).
-// Replace with a local asset for production.
 const EARTH_DAY_TEX  = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r134/examples/textures/planets/earth_atmos_2048.jpg';
 const EARTH_BUMP_TEX = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r134/examples/textures/planets/earth_normal_2048.jpg';
 const EARTH_SPEC_TEX = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r134/examples/textures/planets/earth_specular_2048.jpg';
-
+//not needed rlly
 export class GlobeScene {
   /** @type {Engine} */ engine;
   /** @type {Scene}  */ scene;
@@ -86,12 +84,14 @@ export class GlobeScene {
   // ── Private: scene construction ──────────────────────────────────────────
 
   #createEngine() {
+    const deviceScale = Math.min(window.devicePixelRatio || 1, 2);
+
     this.engine = new Engine(this.canvas, true, {
-      preserveDrawingBuffer: true,
+      preserveDrawingBuffer: false,
       stencil: true,
       antialias: true,
     });
-    this.engine.setHardwareScalingLevel(1 / window.devicePixelRatio);
+    this.engine.setHardwareScalingLevel(1 / deviceScale);
   }
 
   #createScene() {
@@ -155,6 +155,7 @@ export class GlobeScene {
     mat.emissiveColor = new Color3(0.02, 0.05, 0.18);
     mat.specularColor = new Color3(0.1, 0.2, 0.5);
     mat.specularPower = 32;
+    mat.alpha = 1.0;  // fully opaque
   
     this.globe.material = mat;
   }
@@ -205,6 +206,14 @@ export class GlobeScene {
     outer.material = outerMat;
   }
   #setupGlow() {
+    const userAgent = navigator.userAgent || '';
+    const isAppleWebKit = /Mac|iPhone|iPad|iPod/.test(userAgent) && /WebKit/.test(userAgent);
+
+    if (isAppleWebKit) {
+      console.warn('[GlobeScene] GlowLayer disabled on Apple WebKit to avoid rendering corruption.');
+      return;
+    }
+
     // Glow layer makes arc lines bloom — crucial for the neon effect
     this.glowLayer = new GlowLayer('glow', this.scene);
     this.glowLayer.intensity = 0.6;

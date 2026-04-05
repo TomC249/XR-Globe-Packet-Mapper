@@ -44,6 +44,12 @@ const MOCK_CITIES = [
   { lat: 34.05,  lon: -118.24, city: 'Los Angeles'},
 ];
 const PROTOCOLS = ['TCP', 'TCP', 'TCP', 'UDP', 'UDP', 'HTTPS', 'HTTP', 'DNS', 'ICMP'];
+const MOCK_LOCAL_SERVER = {
+  lat: 53.48,
+  lon: -2.24,
+  city: 'Local Server',
+  ip: '127.0.0.1',
+};
 
 export class DataFeed {
   #url;
@@ -135,17 +141,15 @@ export class DataFeed {
 
   #generateMockFlow() {
     const src = MOCK_CITIES[Math.floor(Math.random() * MOCK_CITIES.length)];
-    let dst;
-    do { dst = MOCK_CITIES[Math.floor(Math.random() * MOCK_CITIES.length)]; }
-    while (dst === src);
+    const dst = MOCK_LOCAL_SERVER;
 
     return {
       srcIp:    this.#randomIp(),
-      dstIp:    this.#randomIp(),
+      dstIp:    dst.ip,
       srcLat:   src.lat  + (Math.random() - 0.5) * 2,
       srcLon:   src.lon  + (Math.random() - 0.5) * 2,
-      dstLat:   dst.lat  + (Math.random() - 0.5) * 2,
-      dstLon:   dst.lon  + (Math.random() - 0.5) * 2,
+      dstLat:   dst.lat,
+      dstLon:   dst.lon,
       srcCity:  src.city,
       dstCity:  dst.city,
       protocol: PROTOCOLS[Math.floor(Math.random() * PROTOCOLS.length)],

@@ -39,14 +39,16 @@ const FLAGGED_COLOR = new Color3(1.00, 0.10, 0.10);
 // ── Tuning ─────────────────────────────────────────────────────────────────
 const BEZIER_SEGMENTS    = 48;
 const ARC_HEIGHT_FACTOR  = 0.55;
-const LOD_ZOOM_THRESHOLD = 18;   // camera radius — below = zoomed in
-const MAX_FLOW_AGE       = 8.0;  // seconds before a flow is dropped from group
+const LOD_ZOOM_THRESHOLD = 14;   // camera radius — below = zoomed in (closer than before)
+const MAX_FLOW_AGE       = 15.0;  // seconds before a flow is dropped from group
 const HOLD_DURATION      = 4.0;
 const FADE_DURATION      = 1.5;
 const MAX_GROUPS         = 120;
 
 // Individual arc spread — how far apart zoomed-in arcs fan out
-const SPREAD_FACTOR      = 0.012;
+const SPREAD_RADIUS_MAX  = 0.32;
+const SPREAD_PUSH_SCALE  = 3.2;
+const GOLDEN_ANGLE       = 2.399963229728653;
 
 export class NetworkArcs {
   #scene;
@@ -78,8 +80,11 @@ export class NetworkArcs {
     const dst = latLonToVec3(dstLat, dstLon, this.#radius);
     if (Vector3.Distance(src, dst) < 0.01) return;
 
-    // Group key — aggregate by destination IP
-    const key = dstIp;
+    // Group by destination plus coarse source bucket so flows converge
+    // on one endpoint while still appearing from many origins.
+    const srcLatBucket = Math.round(srcLat * 4) / 4;
+    const srcLonBucket = Math.round(srcLon * 4) / 4;
+    const key = `${dstIp}|${srcLatBucket.toFixed(2)},${srcLonBucket.toFixed(2)}`;
 
     if (!this.#groups.has(key)) {
       if (this.#groups.size >= MAX_GROUPS) {
@@ -232,19 +237,43 @@ export class NetworkArcs {
 #buildIndividualMeshes(group) {
   group.meshes = [];
   const count = group.flows.length;
-  const midDir     = group.src.add(group.dst).normalize();
-  const up         = new Vector3(0, 1, 0);
-  const spreadAxis = Vector3.Cross(midDir, up).normalize();
+  const chordDir = group.dst.subtract(group.src).normalize();
+
+  // Build a stable local 2D basis around the arc path.
+  let axisA = Vector3.Cross(chordDir, new Vector3(0, 1, 0));
+  if (axisA.lengthSquared() < 1e-6) {
+    axisA = Vector3.Cross(chordDir, new Vector3(1, 0, 0));
+  }
+  axisA = axisA.normalize();
+  const axisB = Vector3.Cross(chordDir, axisA).normalize();
 
   group.flows.forEach((flow, i) => {
-    const offset = (i - (count - 1) / 2) * SPREAD_FACTOR;
-    const nudgedSrc = group.src.add(spreadAxis.scale(offset * 3));
-    const nudgedDst = group.dst.add(spreadAxis.scale(offset * 3));
+    const normalizedRank = count > 1 ? Math.sqrt(i / (count - 1)) : 0;
+    const radius = normalizedRank * SPREAD_RADIUS_MAX;
+    const angle = i * GOLDEN_ANGLE;
 
-    const curve = computeBezierCurve(
-      nudgedSrc, nudgedDst, this.#radius,
-      ARC_HEIGHT_FACTOR + offset * 0.5, BEZIER_SEGMENTS
-    );
+    const offsetVec = axisA.scale(Math.cos(angle) * radius)
+      .add(axisB.scale(Math.sin(angle) * radius));
+
+    // Keep shared endpoints and spread only through the control point.
+    const source = group.src;
+    const destination = group.dst;
+    const mid = source.add(destination).scale(0.5);
+    const chordLength = Vector3.Distance(source, destination);
+    const apexRadius = this.#radius + chordLength * (ARC_HEIGHT_FACTOR + radius * 0.22);
+    const control = mid.normalize().scale(apexRadius)
+      .add(offsetVec.scale(SPREAD_PUSH_SCALE));
+
+    const curve = [];
+    for (let s = 0; s <= BEZIER_SEGMENTS; s++) {
+      const t = s / BEZIER_SEGMENTS;
+      const inv = 1 - t;
+      curve.push(
+        source.scale(inv * inv)
+          .add(control.scale(2 * inv * t))
+          .add(destination.scale(t * t))
+      );
+    }
 
     // Flagged flows always red regardless of protocol
     const color = flow.flagged

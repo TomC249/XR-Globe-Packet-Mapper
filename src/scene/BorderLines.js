@@ -2,6 +2,7 @@
  * BorderLines.js
  * Land dots via PointsCloudSystem — single draw call, no rotation math.
  * Border lines via TopoJSON — parented to globe.
+ * TODO, add alert lines
  */
 import {
   MeshBuilder,

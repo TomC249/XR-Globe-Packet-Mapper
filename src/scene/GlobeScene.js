@@ -2,6 +2,7 @@
  * GlobeScene.js
  * Core Babylon.js scene: engine, camera, Earth sphere, atmosphere,
  * border lines, and arc management.
+ * TODO add VR support.
  */
 import {
   Engine,

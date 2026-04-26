@@ -4,7 +4,7 @@
  * Zoomed OUT: one tube per destination, thickness + colour = traffic volume
  * Zoomed IN:  individual lines per flow, spread slightly so they don't overlap
  *
- * LOD switches at camera radius threshold.
+ * LOD switches at camera radius threshold, can mess with threshold
  */
 import {
   MeshBuilder,

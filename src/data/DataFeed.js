@@ -14,7 +14,7 @@
  *   "bytes":    4096,
  *   "ts":       1700000000   // unix timestamp
  * }
- *
+ * if incoming/outcoming is "local" ip, will default to local server location.
  * While disconnected (or in dev with no server), falls back to
  * MOCK_MODE which generates realistic-looking random flows.
  */

@@ -123,18 +123,7 @@ Swap the `EARTH_*_TEX` URLs in `GlobeScene.js` for local assets in `public/asset
 
 ### Camera limits
 `lowerRadiusLimit` / `upperRadiusLimit` in `GlobeScene.js` control how far you can zoom in/out.
-
-### Adding WebXR
-When you're ready, Babylon's WebXR is one method call:
-```js
-const xr = await scene.createDefaultXRExperienceAsync({
-  uiOptions: { sessionMode: 'immersive-vr' }
-});
-```
-
 ---
-
-## Extending the backend
 
 ### Replay from DB
 ```python

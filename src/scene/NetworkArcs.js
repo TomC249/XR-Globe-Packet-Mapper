@@ -54,6 +54,7 @@ export class NetworkArcs {
   #scene;
   #radius;
   #camera;
+  #parent;
 
   // Map of `srcIp->dstIp` => FlowGroup
   #groups = new Map();
@@ -63,10 +64,11 @@ export class NetworkArcs {
   #lastLOD = null;
   #dirtyGroups = new Set();
 
-  constructor(scene, globeRadius, camera) {
+  constructor(scene, globeRadius, camera, parent = null) {
     this.#scene  = scene;
     this.#radius = globeRadius;
     this.#camera = camera;
+    this.#parent = parent;
   }
 
   // ── Public ────────────────────────────────────────────────────────────────
@@ -216,7 +218,7 @@ export class NetworkArcs {
   if (flagged) group._flagged = true;
 
   const curve = computeBezierCurve(
-    group.src, group.dst, this.#radius, ARC_HEIGHT_FACTOR, BEZIER_SEGMENTS
+    group.src, group.dst, this.#radius + 0.005, ARC_HEIGHT_FACTOR, BEZIER_SEGMENTS
   );
 
   const mesh = MeshBuilder.CreateTube('aggArc', {
@@ -226,12 +228,13 @@ export class NetworkArcs {
     updatable: false,
   }, this.#scene);
 
-  mesh.material = mat;
+  mesh.material   = mat;
   mesh.isPickable = false;
-  mesh.alpha = group.alpha;
+  mesh.alpha      = group.alpha;
+  if (this.#parent) mesh.parent = this.#parent;
 
   group.meshes = [mesh];
-  group._mat = mat;
+  group._mat   = mat;
 }
 
 #buildIndividualMeshes(group) {
@@ -260,7 +263,7 @@ export class NetworkArcs {
     const destination = group.dst;
     const mid = source.add(destination).scale(0.5);
     const chordLength = Vector3.Distance(source, destination);
-    const apexRadius = this.#radius + chordLength * (ARC_HEIGHT_FACTOR + radius * 0.22);
+    const apexRadius = this.#radius + 0.005 + chordLength * (ARC_HEIGHT_FACTOR + radius * 0.22);
     const control = mid.normalize().scale(apexRadius)
       .add(offsetVec.scale(SPREAD_PUSH_SCALE));
 
@@ -285,9 +288,10 @@ export class NetworkArcs {
       updatable: false,
     }, this.#scene);
 
-    mesh.color = color;
-    mesh.alpha = group.alpha;
+    mesh.color      = color;
+    mesh.alpha      = group.alpha;
     mesh.isPickable = false;
+    if (this.#parent) mesh.parent = this.#parent;
     group.meshes.push(mesh);
   });
 }

@@ -1,254 +1,719 @@
 /**
  * GlobeScene.js
- * Core Babylon.js scene: engine, camera, Earth sphere, atmosphere,
- * border lines, and arc management.
- * TODO add VR support.
+ * Owns the Babylon scene, globe, hex layers, borders, XR, and render loop.
  */
 import {
-  Engine,
-  Scene,
   ArcRotateCamera,
-  HemisphericLight,
-  DirectionalLight,
-  MeshBuilder,
-  StandardMaterial,
-  Texture,
   Color3,
   Color4,
-  Vector3,
+  DirectionalLight,
+  Engine,
   GlowLayer,
+  HemisphericLight,
+  Matrix,
+  Mesh,
+  MeshBuilder,
+  Quaternion,
+  Scene,
+  StandardMaterial,
+  Texture,
+  TransformNode,
+  Vector3,
+  VertexData,
+  WebXRFeatureName,
+  WebXRState,
 } from '@babylonjs/core';
+import { polygonToCells, cellToLatLng, cellToBoundary } from 'h3-js';
 
-import { NetworkArcs } from './NetworkArcs.js';
-import { BorderLines } from './BorderLines.js';
+import { NetworkArcs, latLonToVec3 } from './NetworkArcs.js';
+import { WristHUD } from './WristHUD.js';
+import { ControllerInput } from '../xr/ControllerInput.js';
 
-// ── Constants ──────────────────────────────────────────────────────────────
-export const GLOBE_RADIUS = 5;
-
+const GLOBE_RADIUS = 0.35;
 const EARTH_DAY_TEX  = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r134/examples/textures/planets/earth_atmos_2048.jpg';
 const EARTH_BUMP_TEX = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r134/examples/textures/planets/earth_normal_2048.jpg';
 const EARTH_SPEC_TEX = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r134/examples/textures/planets/earth_specular_2048.jpg';
-//not needed rlly
-export class GlobeScene {
-  /** @type {Engine} */ engine;
-  /** @type {Scene}  */ scene;
-  /** @type {NetworkArcs} */ arcs;
 
+const COUNTRIES_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-50m.json';
+const HEX_RESOLUTION = 5;
+const HEX_OFFSET = 0.001;
+const BORDER_OFFSET = 0.001;
+
+const HEX_COLOR = new Color3(0.73, 0.69, 0.95);
+const HEX_EMISSIVE = new Color3(0.18, 0.16, 0.28);
+const BORDER_COLOR = new Color3(0.31, 0.36, 0.67);
+const EARTH_COLOR = new Color3(0.13, 0.17, 0.43);
+const SCENE_CLEAR_COLOR = new Color4(0.02, 0.03, 0.05, 1.0);
+
+// ── Controller input tuning ────────────────────────────────────────────────
+const CONTROLLER_ROTATION_SPEED = 1.2;
+const CONTROLLER_SCALE_MIN = 0.5;
+const CONTROLLER_SCALE_MAX = 3.0;
+const CONTROLLER_TRANSLATE_SPEED = 2.0;
+const GRAB_DISTANCE_SPEED = 0.02;
+const GRAB_DISTANCE_DEADZONE = 0.15;
+
+export class GlobeScene {
+  #canvas;
   #eventHandlers = {};
-  #fps = 0;
+  #lastFrameTime = 0;
+  #controllerInput = null;
+  #backgroundRemover = null;
+  #arSessionSupported = false;
+  #arSessionActive = false;
+  #grabActive = false;
+  #grabHandedness = null;
+  #grabOffsetLocal = null;
+  #grabRotationOffset = null;
 
   constructor(canvas) {
-    this.canvas = canvas;
+    this.#canvas = canvas;
+    this.fps = 0;
+    this.wristHUD = null;
+    this.xr = null;
+    this.landHexMesh = null;
+    this.borderLineMesh = null;
   }
-
-  // ── Public API ───────────────────────────────────────────────────────────
 
   async init() {
     this.#createEngine();
     this.#createScene();
+    this.sceneRoot = new TransformNode('sceneRoot', this.scene);
+    this.globeRoot = new TransformNode('globeRoot', this.scene);
+    this.globeRoot.parent = this.sceneRoot;
+
     this.#createCamera();
     this.#createLights();
-    await this.#createGlobe();
+    this.#createGlobe();
     this.#createAtmosphere();
-    //this.#createStarfield();
     this.#setupGlow();
-
-    this.arcs = new NetworkArcs(this.scene, GLOBE_RADIUS, this.camera);
-
-    await BorderLines.load(this.scene, GLOBE_RADIUS, this.globe);
-
     this.#startRenderLoop();
+
+    void this.#createSurfaceLayers().catch((error) => {
+      console.warn('[GlobeScene] Surface layers disabled:', error);
+    });
+
+    this.arcs = new NetworkArcs(this.scene, GLOBE_RADIUS, this.camera, this.globeRoot);
+    this.wristHUD = new WristHUD(this.scene);
+
     this.#handleResize();
+    await this.#initXR();
   }
 
-  /**
-   * Add a network flow to the globe.
-   * @param {{ srcLat, srcLon, dstLat, dstLon, protocol, bytes, srcIp, dstIp }} flow
-   */
   addFlow(flow) {
-    this.arcs.addArc(flow);
+    this.arcs?.addArc(flow);
     this.#emit('flowAdded', flow);
   }
 
-  /** Number of currently visible arcs */
-  get activeArcCount() { return this.arcs.activeCount; }
+  get activeArcCount() {
+    return this.arcs?.activeCount ?? 0;
+  }
 
-  /** Current FPS */
-  get fps() { return this.#fps; }
+  onXRStateChange(handler) {
+    this.#eventHandlers.xrStateChange = this.#eventHandlers.xrStateChange ?? [];
+    this.#eventHandlers.xrStateChange.push(handler);
+  }
 
-  /** Simple event emitter — supports 'flowAdded' */
   on(event, handler) {
     this.#eventHandlers[event] = this.#eventHandlers[event] ?? [];
     this.#eventHandlers[event].push(handler);
   }
 
-  // ── Private: scene construction ──────────────────────────────────────────
-
   #createEngine() {
-    const deviceScale = Math.min(window.devicePixelRatio || 1, 2);
-
-    this.engine = new Engine(this.canvas, true, {
-      preserveDrawingBuffer: false,
+    this.engine = new Engine(this.#canvas, true, {
+      preserveDrawingBuffer: true,
       stencil: true,
-      antialias: true,
+      alpha: true,
     });
-    this.engine.setHardwareScalingLevel(1 / deviceScale);
   }
 
   #createScene() {
     this.scene = new Scene(this.engine);
-    this.scene.clearColor = new Color4(0, 0, 0, 1);
-    // Prevent default right-click context menu
-    this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    this.scene.clearColor = SCENE_CLEAR_COLOR;
   }
 
   #createCamera() {
     this.camera = new ArcRotateCamera(
-      'cam',
-      0,              // alpha=0 faces toward lon=0 — Europe/Africa
-      Math.PI / 3,    // beta=60° — looking slightly down from north, Google Earth style
-      GLOBE_RADIUS * 2.8,
+      'camera',
+      -Math.PI / 2,
+      Math.PI / 2.35,
+      GLOBE_RADIUS * 2.2,
       Vector3.Zero(),
       this.scene,
     );
-  
-    this.camera.attachControl(this.canvas, true);
-    this.camera.lowerRadiusLimit = GLOBE_RADIUS * 1.15;
-    this.camera.upperRadiusLimit = GLOBE_RADIUS * 8;
-    this.camera.inertia          = 0.85;
-    this.camera.wheelPrecision   = 40;
-    this.camera.pinchPrecision   = 60;
-    this.camera.lowerBetaLimit   = 0.2;
-    this.camera.upperBetaLimit   = Math.PI - 0.2;
+    this.camera.attachControl(this.#canvas, true);
+    this.camera.lowerRadiusLimit = GLOBE_RADIUS * 0.4;
+    this.camera.upperRadiusLimit = GLOBE_RADIUS * 6.0;
+    this.camera.wheelDeltaPercentage = 0.01;
+    this.camera.panningSensibility = 0;
+    this.camera.minZ = 0.01;
+    this.camera.maxZ = 1000;
   }
+
   #createLights() {
-    // Ambient fill — prevents the dark side from being pitch black
-    const ambient = new HemisphericLight(
-      'ambient',
-      new Vector3(0, 1, 0),
-      this.scene,
-    );
-    ambient.intensity = 0.3;
-    ambient.diffuse = new Color3(0.4, 0.6, 1.0);
-    ambient.groundColor = new Color3(0.05, 0.05, 0.1);
+    const hemi = new HemisphericLight('hemiLight', new Vector3(0, 1, 0), this.scene);
+    hemi.intensity = 1.15;
+    hemi.diffuse = new Color3(0.55, 0.67, 0.88);
+    hemi.groundColor = new Color3(0.05, 0.08, 0.12);
 
-    // Sun directional light
-    const sun = new DirectionalLight(
-      'sun',
-      new Vector3(-1, -0.5, -1).normalize(),
-      this.scene,
-    );
-    sun.intensity = 1.4;
-    sun.diffuse = new Color3(1, 0.95, 0.85);
+    const dir = new DirectionalLight('dirLight', new Vector3(-0.35, -0.75, -0.45), this.scene);
+    dir.intensity = 1.35;
+    dir.diffuse = new Color3(0.95, 0.98, 1.0);
   }
 
-  async #createGlobe() {
+  #createGlobe() {
     this.globe = MeshBuilder.CreateSphere(
       'earth',
       { diameter: GLOBE_RADIUS * 2, segments: 64 },
       this.scene,
     );
-  
+
     const mat = new StandardMaterial('earthMat', this.scene);
-  
-    // Deep navy base colour
-    mat.diffuseColor  = new Color3(0.2, 0.06, 0.1);
-    mat.emissiveColor = new Color3(0.02, 0.05, 0.18);
-    mat.specularColor = new Color3(0.1, 0.2, 0.5);
-    mat.specularPower = 32;
-    mat.alpha = 1.0;  // fully opaque
-  
-    this.globe.material = mat;
-  }
-  #createStarfield() {
-    // Simple point-based starfield using a large sphere with inverted normals
-    const stars = MeshBuilder.CreateSphere(
-      'stars',
-      { diameter: GLOBE_RADIUS * 40, segments: 8 },
-      this.scene,
-    );
-
-    const mat = new StandardMaterial('starsMat', this.scene);
-    mat.emissiveColor = new Color3(1, 1, 1);
+    mat.diffuseColor = EARTH_COLOR;
+    mat.emissiveColor = new Color3(0.02, 0.05, 0.12);
+    mat.specularColor = new Color3(0.04, 0.04, 0.06);
     mat.backFaceCulling = false;
-    mat.disableLighting = true;
+    mat.alpha = 1.0;
 
-    // Use a star texture if you have one; otherwise a subtle noise works
-    // mat.emissiveTexture = new Texture('/assets/stars.png', this.scene);
-    mat.alpha = 0.6;
-    stars.material = mat;
+    this.globe.material = mat;
+    this.globe.parent = this.globeRoot;
+  }
+
+  async #createSurfaceLayers() {
+    const topology = await fetch(COUNTRIES_URL)
+      .then((response) => response.json())
+      .catch((error) => {
+        console.error('[GlobeScene] Failed to load country topology:', error);
+        return null;
+      });
+
+    if (!topology) return;
+
+    try {
+      const countries = this.#decodeTopojson(topology);
+      this.landHexMesh = this.#buildHexMesh(countries);
+      if (this.landHexMesh) this.landHexMesh.parent = this.globeRoot;
+
+      this.borderLineMesh = this.#buildBorderLineSystem(countries);
+      if (this.borderLineMesh) this.borderLineMesh.parent = this.globeRoot;
+
+      if (this.glowLayer) {
+        if (this.landHexMesh) this.glowLayer.addExcludedMesh(this.landHexMesh);
+        if (this.borderLineMesh) this.glowLayer.addExcludedMesh(this.borderLineMesh);
+      }
+    } catch (error) {
+      console.warn('[GlobeScene] Surface layer generation failed:', error);
+    }
   }
 
   #createAtmosphere() {
-  // Inner glow shell
-  const inner = MeshBuilder.CreateSphere(
-    'atmoInner',
-    { diameter: GLOBE_RADIUS * 2.02, segments: 32 },
-    this.scene,
-  );
-  const innerMat = new StandardMaterial('atmoInnerMat', this.scene);
-  innerMat.emissiveColor   = new Color3(0.05, 0.2, 0.8);
-  innerMat.alpha           = 0.08;
-  innerMat.backFaceCulling = false;
-  innerMat.disableLighting = true;
-  inner.material = innerMat;
+    const inner = MeshBuilder.CreateSphere(
+      'atmoInner',
+      { diameter: GLOBE_RADIUS * 2.02, segments: 64 },
+      this.scene,
+    );
+    const innerMat = new StandardMaterial('atmoInnerMat', this.scene);
+    innerMat.diffuseColor = new Color3(0.20, 0.55, 1.0);
+    innerMat.emissiveColor = new Color3(0.08, 0.22, 0.45);
+    innerMat.alpha = 0.12;
+    innerMat.backFaceCulling = false;
+    innerMat.disableLighting = true;
+    inner.material = innerMat;
+    inner.parent = this.globeRoot;
 
-  // Outer glow halo
     const outer = MeshBuilder.CreateSphere(
       'atmoOuter',
-      { diameter: GLOBE_RADIUS * 2.12, segments: 32 },
+      { diameter: GLOBE_RADIUS * 2.12, segments: 64 },
       this.scene,
     );
     const outerMat = new StandardMaterial('atmoOuterMat', this.scene);
-    outerMat.emissiveColor   = new Color3(0.02, 0.1, 0.6);
-    outerMat.alpha           = 0.05;
+    outerMat.diffuseColor = new Color3(0.20, 0.55, 1.0);
+    outerMat.emissiveColor = new Color3(0.08, 0.22, 0.45);
+    outerMat.alpha = 0.05;
     outerMat.backFaceCulling = false;
     outerMat.disableLighting = true;
     outer.material = outerMat;
+    outer.parent = this.globeRoot;
   }
+
   #setupGlow() {
-    const userAgent = navigator.userAgent || '';
-    const isAppleWebKit = /Mac|iPhone|iPad|iPod/.test(userAgent) && /WebKit/.test(userAgent);
+    this.glowLayer = new GlowLayer('glowLayer', this.scene, {
+      blurKernelSize: 32,
+    });
 
-    if (isAppleWebKit) {
-      console.warn('[GlobeScene] GlowLayer disabled on Apple WebKit to avoid rendering corruption.');
-      return;
-    }
-
-    // Glow layer makes arc lines bloom — crucial for the neon effect
-    this.glowLayer = new GlowLayer('glow', this.scene);
     this.glowLayer.intensity = 0.6;
     this.glowLayer.blurKernelSize = 32;
-
-    // Only glow the arc meshes, not the globe
     this.glowLayer.addExcludedMesh(this.globe);
+    if (this.landHexMesh) this.glowLayer.addExcludedMesh(this.landHexMesh);
+    if (this.borderLineMesh) this.glowLayer.addExcludedMesh(this.borderLineMesh);
   }
 
-  // ── Private: loop & resize ────────────────────────────────────────────────
-
   #startRenderLoop() {
-    let frames = 0;
-    let lastTime = performance.now();
+    this.#lastFrameTime = performance.now();
 
     this.engine.runRenderLoop(() => {
-      this.scene.render();
-      this.arcs.tick(this.engine.getDeltaTime() / 1000);
-
-      frames++;
       const now = performance.now();
-      if (now - lastTime >= 500) {
-        this.#fps = (frames * 1000) / (now - lastTime);
-        frames = 0;
-        lastTime = now;
-      }
+      const dt = Math.max((now - this.#lastFrameTime) / 1000, 1 / 240);
+      this.#lastFrameTime = now;
+
+      this.arcs?.tick(dt);
+      this.#controllerInput?.update();
+      this.scene.render();
+
+      const instantaneousFps = 1 / dt;
+      this.fps = this.fps ? (this.fps * 0.9 + instantaneousFps * 0.1) : instantaneousFps;
     });
   }
 
   #handleResize() {
-    window.addEventListener('resize', () => this.engine.resize());
+    window.addEventListener('resize', () => {
+      this.engine.resize();
+    });
+  }
+
+  async #initXR() {
+    try {
+      this.xr = await this.scene.createDefaultXRExperienceAsync();
+    } catch (error) {
+      console.warn('[GlobeScene] WebXR is unavailable:', error);
+      return;
+    }
+
+    this.wristHUD?.init(this.xr, 'right');
+    this.#setupControllerInput();
+    this.#loadControllerModels();
+    await this.#setupPassthrough();
+
+    this.xr.baseExperience.onStateChangedObservable.add((state) => {
+      const inXR = state === WebXRState.IN_XR;
+      this.sceneRoot.position.z = inXR ? GLOBE_RADIUS * 1.5 : 0;
+      if (inXR) {
+        this.#syncPassthroughWithSession(this.xr.baseExperience.sessionManager.session);
+      } else {
+        this.#applyPassthrough(false);
+      }
+      this.#emit('xrStateChange', inXR);
+    });
   }
 
   #emit(event, data) {
-    this.#eventHandlers[event]?.forEach((h) => h(data));
+    this.#eventHandlers[event]?.forEach((handler) => handler(data));
+  }
+
+  #setupControllerInput() {
+    if (!this.xr) return;
+
+    this.#controllerInput = new ControllerInput(this.xr);
+
+    // Scaling via both grip buttons (AND logic)
+    let currentScale = 1.0;
+    this.#controllerInput.on('scale', ({ factor }) => {
+      currentScale *= factor;
+      currentScale = Math.max(CONTROLLER_SCALE_MIN, Math.min(CONTROLLER_SCALE_MAX, currentScale));
+      this.globeRoot.scaling.scaleInPlace(factor);
+    });
+
+    // Single grip rotation around X/Y/Z axes (globe origin)
+    this.#controllerInput.on('rotateX', ({ delta }) => {
+      this.globeRoot.rotation.x += delta * CONTROLLER_ROTATION_SPEED;
+    });
+    this.#controllerInput.on('rotateY', ({ delta }) => {
+      this.globeRoot.rotation.y -= delta * CONTROLLER_ROTATION_SPEED;
+    });
+    this.#controllerInput.on('rotateZ', ({ delta }) => {
+      this.globeRoot.rotation.z += delta * CONTROLLER_ROTATION_SPEED;
+    });
+
+    // Trigger grab behavior (pick up globe)
+    this.#controllerInput.on('grabStart', (data) => {
+      this.#startGrab(data);
+    });
+    this.#controllerInput.on('grabMove', (data) => {
+      this.#updateGrab(data);
+    });
+    this.#controllerInput.on('grabAdjust', (data) => {
+      this.#adjustGrabDistance(data);
+    });
+    this.#controllerInput.on('grabEnd', (data) => {
+      this.#endGrab(data);
+    });
+
+    // Left trigger translation (6DOF - all axes)
+    this.#controllerInput.on('translateLeft', ({ delta }) => {
+      this.sceneRoot.position.addInPlace(delta.scale(CONTROLLER_TRANSLATE_SPEED));
+    });
+
+    // Right trigger translation (6DOF - all axes)
+    this.#controllerInput.on('translateRight', ({ delta }) => {
+      this.sceneRoot.position.addInPlace(delta.scale(CONTROLLER_TRANSLATE_SPEED));
+    });
+
+    // Movement via both triggers (AND logic) - move on all axes
+    this.#controllerInput.on('move', ({ delta }) => {
+      this.sceneRoot.position.addInPlace(delta.scale(CONTROLLER_TRANSLATE_SPEED));
+    });
+
+    // AR toggle via Y button
+    this.#controllerInput.on('toggleAR', () => {
+      void this.#toggleAR();
+    });
+
+    console.log('[GlobeScene] Controller input initialized');
+  }
+
+  #startGrab({ handedness, position, rotationQuaternion }) {
+    if (!position || !rotationQuaternion) return;
+
+    if (!this.globeRoot.rotationQuaternion) {
+      this.globeRoot.rotationQuaternion = Quaternion.FromEulerAngles(
+        this.globeRoot.rotation.x,
+        this.globeRoot.rotation.y,
+        this.globeRoot.rotation.z,
+      );
+    }
+
+    const controllerRotation = rotationQuaternion.clone().normalize();
+    const globeRotation = this.globeRoot.rotationQuaternion.clone();
+
+    const offsetWorld = this.sceneRoot.position.subtract(position);
+    const inverseController = controllerRotation.clone().invert();
+
+    const inverseMatrix = new Matrix();
+    inverseController.toRotationMatrix(inverseMatrix);
+    const offsetLocal = Vector3.TransformCoordinates(offsetWorld, inverseMatrix);
+
+    const rotationOffset = inverseController.multiply(globeRotation);
+
+    this.#grabActive = true;
+    this.#grabHandedness = handedness;
+    this.#grabOffsetLocal = offsetLocal;
+    this.#grabRotationOffset = rotationOffset;
+  }
+
+  #updateGrab({ handedness, position, rotationQuaternion }) {
+    if (!this.#grabActive || this.#grabHandedness !== handedness) return;
+    if (!position || !rotationQuaternion) return;
+
+    const controllerRotation = rotationQuaternion.clone().normalize();
+
+    const rotationMatrix = new Matrix();
+    controllerRotation.toRotationMatrix(rotationMatrix);
+
+    const offsetWorld = Vector3.TransformCoordinates(this.#grabOffsetLocal, rotationMatrix);
+    const newPosition = position.add(offsetWorld);
+    this.sceneRoot.position.copyFrom(newPosition);
+
+    const newRotation = controllerRotation.multiply(this.#grabRotationOffset);
+    if (!this.globeRoot.rotationQuaternion) {
+      this.globeRoot.rotationQuaternion = newRotation.clone();
+    } else {
+      this.globeRoot.rotationQuaternion.copyFrom(newRotation);
+    }
+  }
+
+  #endGrab({ handedness }) {
+    if (this.#grabHandedness !== handedness) return;
+    this.#grabActive = false;
+    this.#grabHandedness = null;
+    this.#grabOffsetLocal = null;
+    this.#grabRotationOffset = null;
+  }
+
+  #adjustGrabDistance({ handedness, axisY, position, rotationQuaternion }) {
+    if (!this.#grabActive || this.#grabHandedness !== handedness) return;
+    if (!this.#grabOffsetLocal) return;
+    if (Math.abs(axisY) < GRAB_DISTANCE_DEADZONE) return;
+    if (!position || !rotationQuaternion) return;
+
+    const direction = this.sceneRoot.position.subtract(position);
+    const currentDistance = direction.length();
+    if (currentDistance < 0.001) return;
+
+    direction.normalize();
+    const distanceDelta = -axisY * GRAB_DISTANCE_SPEED;
+    const newDistance = Math.max(0.05, currentDistance + distanceDelta);
+
+    const offsetWorld = direction.scale(newDistance);
+    const inverseController = rotationQuaternion.clone().normalize().invert();
+    const inverseMatrix = new Matrix();
+    inverseController.toRotationMatrix(inverseMatrix);
+    this.#grabOffsetLocal = Vector3.TransformCoordinates(offsetWorld, inverseMatrix);
+    this.sceneRoot.position.copyFrom(position.add(offsetWorld));
+  }
+
+  async #toggleAR() {
+    if (!this.xr) return;
+
+    if (!this.#arSessionSupported) {
+      console.warn('[GlobeScene] AR sessions are not supported on this device.');
+      return;
+    }
+
+    const sessionManager = this.xr.baseExperience.sessionManager;
+    const targetMode = this.#arSessionActive ? 'immersive-vr' : 'immersive-ar';
+
+    if (sessionManager.inXRSession) {
+      await this.xr.baseExperience.exitXRAsync();
+    }
+
+    try {
+      await this.xr.baseExperience.enterXRAsync(
+        targetMode,
+        'local-floor',
+        this.xr.renderTarget,
+        {
+          optionalFeatures: [
+            'local-floor',
+            'bounded-floor',
+            'hand-tracking',
+            'layers',
+            'dom-overlay',
+            'dom-screen-detail',
+            'hit-test',
+          ],
+        },
+      );
+    } catch (error) {
+      console.warn('[GlobeScene] Failed to toggle AR session:', error);
+    }
+  }
+
+  async #setupPassthrough() {
+    if (!this.xr) return;
+
+    this.#backgroundRemover = this.xr.baseExperience.featuresManager.enableFeature(
+      WebXRFeatureName.BACKGROUND_REMOVER,
+      'latest',
+    );
+    this.#backgroundRemover.detach();
+
+    try {
+      this.#arSessionSupported = await this.xr.baseExperience.sessionManager.isSessionSupportedAsync('immersive-ar');
+    } catch (error) {
+      console.warn('[GlobeScene] AR session support check failed:', error);
+    }
+
+    this.xr.baseExperience.sessionManager.onXRSessionInit.add((session) => {
+      this.#syncPassthroughWithSession(session);
+    });
+
+    this.xr.baseExperience.sessionManager.onXRSessionEnded.add(() => {
+      this.#arSessionActive = false;
+      this.#applyPassthrough(false);
+    });
+  }
+
+  #syncPassthroughWithSession(session) {
+    if (!session) return;
+    const blendMode = session.environmentBlendMode;
+    this.#arSessionActive = blendMode === 'alpha-blend' || blendMode === 'additive';
+    this.#applyPassthrough(this.#arSessionActive);
+  }
+
+  #applyPassthrough(enabled) {
+    this.scene.clearColor = enabled ? new Color4(0, 0, 0, 0) : SCENE_CLEAR_COLOR;
+    if (this.#backgroundRemover) {
+      if (enabled) {
+        this.#backgroundRemover.attach();
+      } else {
+        this.#backgroundRemover.detach();
+      }
+    }
+  }
+
+  #loadControllerModels() {
+    if (!this.#controllerInput) return;
+
+    const controllers = this.#controllerInput.getControllers();
+    controllers.forEach((controller) => {
+      try {
+        // Motion controllers are automatically loaded by Babylon's XR experience
+        // The models will be available on the controller's motion controller
+        if (controller.xrController.motionController) {
+          const motionController = controller.xrController.motionController;
+          console.log(`[GlobeScene] Loaded ${controller.deviceType} controller model (${controller.handedness})`);
+        }
+      } catch (error) {
+        console.warn(`[GlobeScene] Failed to load ${controller.deviceType} model:`, error);
+      }
+    });
+  }
+
+  #buildHexMesh(countries) {
+    const radius = GLOBE_RADIUS + HEX_OFFSET;
+    const positions = [];
+    const normals = [];
+    const indices = [];
+    const seenCells = new Set();
+    let skippedPolygons = 0;
+
+    for (const polygon of countries) {
+      const normalizedPolygon = this.#normalizePolygonForH3(polygon);
+      if (!normalizedPolygon) {
+        skippedPolygons += 1;
+        continue;
+      }
+
+      let cells = [];
+      try {
+        cells = polygonToCells(normalizedPolygon, HEX_RESOLUTION, true);
+      } catch {
+        skippedPolygons += 1;
+        continue;
+      }
+
+      for (const h3Idx of cells) {
+        if (seenCells.has(h3Idx)) continue;
+        seenCells.add(h3Idx);
+
+        const [centerLat, centerLng] = cellToLatLng(h3Idx);
+        const centerPos = latLonToVec3(centerLat, centerLng, radius);
+        const centerNormal = centerPos.clone().normalize();
+        const boundary = cellToBoundary(h3Idx, true).slice(0, -1).reverse().map(([lng, lat]) => {
+          if (Math.abs(centerLng - lng) > 170) {
+            lng += centerLng > lng ? 360 : -360;
+          }
+          return [lng, lat];
+        });
+
+        const base = positions.length / 3;
+        positions.push(centerPos.x, centerPos.y, centerPos.z);
+        normals.push(centerNormal.x, centerNormal.y, centerNormal.z);
+
+        for (const [lng, lat] of boundary) {
+          const point = latLonToVec3(lat, lng, radius);
+          const pointNormal = point.clone().normalize();
+          positions.push(point.x, point.y, point.z);
+          normals.push(pointNormal.x, pointNormal.y, pointNormal.z);
+        }
+
+        for (let i = 0; i < boundary.length; i++) {
+          indices.push(base, base + 1 + i, base + 1 + ((i + 1) % boundary.length));
+        }
+      }
+    }
+
+    const mesh = new Mesh('landHexagons', this.scene);
+    const data = new VertexData();
+    data.positions = new Float32Array(positions);
+    data.indices = new Uint32Array(indices);
+    data.normals = new Float32Array(normals);
+    data.applyToMesh(mesh, false);
+
+    const material = new StandardMaterial('landHexMat', this.scene);
+    material.diffuseColor = HEX_COLOR;
+    material.emissiveColor = HEX_EMISSIVE;
+    material.alpha = 0.88;
+    material.disableLighting = true;
+    material.backFaceCulling = false;
+    mesh.material = material;
+    mesh.isPickable = false;
+
+    console.log(`[GlobeScene] Built ${seenCells.size} hex cells from country polygons (${skippedPolygons} skipped polygons)`);
+    return mesh;
+  }
+
+  #normalizePolygonForH3(polygon) {
+    const rings = [];
+
+    for (const ring of polygon) {
+      const filtered = [];
+      for (const point of ring) {
+        if (!Array.isArray(point) || point.length < 2) continue;
+        const rawLng = Number(point[0]);
+        const lat = Number(point[1]);
+        if (!Number.isFinite(rawLng) || !Number.isFinite(lat)) continue;
+        if (lat < -90 || lat > 90) continue;
+
+        let lng = rawLng;
+        while (lng > 180) lng -= 360;
+        while (lng < -180) lng += 360;
+        filtered.push([lng, lat]);
+      }
+
+      if (filtered.length < 3) continue;
+
+      const first = filtered[0];
+      const last = filtered[filtered.length - 1];
+      const isClosed = first[0] === last[0] && first[1] === last[1];
+      if (!isClosed) filtered.push([first[0], first[1]]);
+
+      if (filtered.length >= 4) rings.push(filtered);
+    }
+
+    if (rings.length === 0) return null;
+    return rings;
+  }
+
+  #buildBorderLineSystem(countries) {
+    const lines = [];
+    const radius = GLOBE_RADIUS + BORDER_OFFSET;
+
+    for (const polygon of countries) {
+      for (const ring of polygon) {
+        if (ring.length < 2) continue;
+        lines.push(ring.map(([lng, lat]) => latLonToVec3(lat, lng, radius)));
+      }
+    }
+
+    if (lines.length === 0) return null;
+
+    const mesh = MeshBuilder.CreateLineSystem('borders', {
+      lines,
+      updatable: false,
+    }, this.scene);
+
+    mesh.color = BORDER_COLOR;
+    mesh.alpha = 0.52;
+    mesh.isPickable = false;
+
+    console.log(`[GlobeScene] Built ${lines.length} border rings`);
+    return mesh;
+  }
+
+  #loadMaskPixels() {
+    return null;
+  }
+
+  #decodeTopojson(topology) {
+    const object = topology.objects.countries;
+    if (!object) return [];
+
+    const { scale, translate } = topology.transform;
+    const arcs = topology.arcs;
+
+    const decodeArc = (arcIdx) => {
+      const reversed = arcIdx < 0;
+      const idx = reversed ? ~arcIdx : arcIdx;
+      let x = 0;
+      let y = 0;
+
+      const points = arcs[idx].map(([dx, dy]) => {
+        x += dx;
+        y += dy;
+        return [x * scale[0] + translate[0], y * scale[1] + translate[1]];
+      });
+
+      return reversed ? points.reverse() : points;
+    };
+
+    const decodeRing = (ring) => {
+      const coords = ring.flatMap(decodeArc);
+      if (coords.length > 0) coords.push(coords[0]);
+      return coords;
+    };
+
+    const countries = [];
+    for (const geometry of object.geometries) {
+      if (geometry.type === 'Polygon') {
+        countries.push(geometry.arcs.map(decodeRing));
+      } else if (geometry.type === 'MultiPolygon') {
+        for (const polygon of geometry.arcs) {
+          countries.push(polygon.map(decodeRing));
+        }
+      }
+    }
+
+    return countries;
   }
 }

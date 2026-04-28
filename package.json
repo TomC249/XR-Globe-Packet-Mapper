@@ -13,11 +13,17 @@
     "@babylonjs/gui": "^7.x",
     "@babylonjs/loaders": "^7.x",
     "@babylonjs/materials": "^7.x",
+    "@webxr-input-profiles/motion-controllers": "^1.0.0",
     "babylonjs": "^8.56.2",
     "dependencies": "^0.0.1",
     "deps": "^1.0.0",
+    "h3-js": "^4.4.0",
     "pip": "^0.0.1",
     "python": "^0.0.4",
+    "starter-babylonjs": "github:RolandCsibrei/babylonjs-meshline",
     "vite": "^8.0.2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^2.3.0"
   }
 }

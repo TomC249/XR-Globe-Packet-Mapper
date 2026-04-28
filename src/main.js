@@ -16,6 +16,15 @@ const statFps = document.getElementById('stat-fps');
 const globe = new GlobeScene(canvas);
 await globe.init();
 
+// ── XR state ───────────────────────────────────────────────────
+// Hide the 2D HTML overlay when inside an XR session; restore it on exit.
+globe.onXRStateChange((inXR) => {
+  const display = inXR ? 'none' : '';
+  document.getElementById('hud').style.display          = display;
+  document.getElementById('stats-panel').style.display  = display;
+  document.getElementById('legend').style.display       = display;
+});
+
 // ── Data feed ──────────────────────────────────────────────────
 // Change this URL to your WebSocket server endpoint
 const WS_URL = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8765';
@@ -52,6 +61,13 @@ setInterval(() => {
   statFlows.textContent = totalFlows.toLocaleString();
   statRate.textContent = formatBytes(rate) + '/s';
   statFps.textContent = globe.fps.toFixed(0);
+
+  globe.wristHUD?.update({
+    arcs:  globe.activeArcCount,
+    flows: totalFlows,
+    rate:  formatBytes(rate) + '/s',
+    fps:   globe.fps.toFixed(0),
+  });
 
   bytesThisSecond = 0;
   lastRateReset = now;

@@ -26,8 +26,15 @@ globe.onXRStateChange((inXR) => {
 });
 
 // ── Data feed ──────────────────────────────────────────────────
-// Change this URL to your WebSocket server endpoint
-const WS_URL = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8765';
+// For XR: use query param ?ws=<url> to override WebSocket server endpoint
+// Example for XR: ?ws=ws://192.168.1.100:8765
+// For desktop: defaults to localhost
+const params = new URLSearchParams(window.location.search);
+const wsUrlOverride = params.get('ws');
+const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const { hostname, port } = window.location;
+const defaultWsUrl = `${wsProtocol}//${hostname}${port ? ':' + port : ''}/ws`;
+const WS_URL = wsUrlOverride ?? (import.meta.env.VITE_WS_URL ?? defaultWsUrl);
 
 const feed = new DataFeed(WS_URL);
 
@@ -61,13 +68,6 @@ setInterval(() => {
   statFlows.textContent = totalFlows.toLocaleString();
   statRate.textContent = formatBytes(rate) + '/s';
   statFps.textContent = globe.fps.toFixed(0);
-
-  globe.wristHUD?.update({
-    arcs:  globe.activeArcCount,
-    flows: totalFlows,
-    rate:  formatBytes(rate) + '/s',
-    fps:   globe.fps.toFixed(0),
-  });
 
   bytesThisSecond = 0;
   lastRateReset = now;

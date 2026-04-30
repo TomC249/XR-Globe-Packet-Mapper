@@ -152,7 +152,7 @@ export class DataFeed {
       dstLon:   dst.lon,
       srcCity:  src.city,
       dstCity:  dst.city,
-      protocol: PROTOCOLS[Math.floor(Math.random() * PROTOCOLS.length)],
+      protocol: 'TCP',  // Mock/unconnected data is uniform color
       bytes:    Math.floor(Math.random() ** 2 * 1_000_000 + 64),
       ts:       Date.now() / 1000,
     };

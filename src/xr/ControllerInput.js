@@ -24,8 +24,6 @@ class Controller {
     this.gripPressed = false;
     this.gripJustPressed = false;
     this.gripJustReleased = false;
-    this.buttonYPressed = false;
-    this.buttonYJustPressed = false;
     this.thumbstickY = 0;
     console.log(`[Controller] Initialized ${this.handedness} controller for ${this.deviceType}`);
   }
@@ -66,9 +64,6 @@ class Controller {
       this.gripPressed = gamepad.buttons[1]?.pressed ?? false;
       this.gripJustPressed = this.gripPressed && !previousGripPressed;
       this.gripJustReleased = !this.gripPressed && previousGripPressed;
-      const previousButtonYPressed = this.buttonYPressed;
-      this.buttonYPressed = gamepad.buttons[3]?.pressed ?? false;
-      this.buttonYJustPressed = this.buttonYPressed && !previousButtonYPressed;
       this.thumbstickY = this.#getThumbstickY(gamepad);
     }
   }
@@ -90,7 +85,6 @@ export class ControllerInput {
   #controllers = new Map(); // handedness -> Controller
   #eventHandlers = {};
   #previousHandSeparation = null;
-  #arSupported = false;
   #activeGrabHand = null;
 
   constructor(xr) {
@@ -100,9 +94,6 @@ export class ControllerInput {
       console.warn('[ControllerInput] XR input not available');
       return;
     }
-
-    // Detect AR support
-    this.#detectARSupport(xr);
 
     // Track controller connections
     xr.input.onControllerAddedObservable.add((xrController) => {
@@ -116,17 +107,6 @@ export class ControllerInput {
       this.#controllers.delete(handedness);
       console.log(`[ControllerInput] Controller disconnected: ${handedness}`);
     });
-  }
-
-  #detectARSupport(xr) {
-    const session = xr.baseExperience.sessionManager.session;
-    if (session) {
-      this.#arSupported = session.enabledFeatures?.includes('dom-overlay') || 
-                          session.enabledFeatures?.includes('dom-screen-detail') ||
-                          session.visibilityState === 'visible-blurred' || 
-                          session.visibilityState === 'visible';
-      console.log(`[ControllerInput] AR Support: ${this.#arSupported}`);
-    }
   }
 
   on(event, handler) {
@@ -153,11 +133,6 @@ export class ControllerInput {
     // Get controller states
     const leftController = this.#controllers.get('left');
     const rightController = this.#controllers.get('right');
-
-    // Check Y button (left controller only)
-    if (leftController?.buttonYJustPressed) {
-      this.#emit('toggleAR', {});
-    }
 
     // Detect multi-hand button states
     const bothTriggersPressed = leftController?.triggerPressed && rightController?.triggerPressed;

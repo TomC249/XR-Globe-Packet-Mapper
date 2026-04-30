@@ -16,16 +16,25 @@ GeoIP:
   Download GeoLite2-City.mmdb from https://dev.maxmind.com/geoip/geolite2-free-geolocation-data
   and place it alongside this file (or update GEOIP_DB_PATH).
 
-Usage:
-  sudo tshark -T json -l ... | python server.py
-  OR:
-  python server.py  (runs tshark itself as a subprocess)
+Usage (Desktop):
+  python server.py  (runs tshark as a subprocess, mock data on disconnect)
+
+Usage (XR):
+  1. Start server: python server.py
+  2. Find your machine's IP address (e.g., 192.168.1.100)
+  3. In XR device browser, open: http://[machine-ip]:5173/?ws=ws://[machine-ip]:8765
+     Example: http://192.168.1.100:5173/?ws=ws://192.168.1.100:8765
+  
+  The ?ws= query parameter tells the client to use a specific WebSocket server
+  instead of localhost. This is necessary because XR devices on different networks
+  cannot reach the localhost loopback interface of the desktop machine.
 """
 
 import asyncio
 import argparse
 import json
 import logging
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -43,7 +52,7 @@ GEOIP_DB_PATH = Path('GeoLite2-City.mmdb')
 TSHARK_BIN   = 'tshark'    # ensure tshark is in your PATH
 TSHARK_IFACE  = 'Ethernet'   # change to your capture interface
 TSHARK_FILTER = 'not (src net 192.168.0.0/16 or src net 10.0.0.0/8 or src net 172.16.0.0/12 or dst net 192.168.0.0/16 or dst net 10.0.0.0/8 or dst net 172.16.0.0/12)'
-PCAP_FILE = r'4SICS-GeekLounge-151021.pcap'  # update this path
+PCAP_FILE = r'2025-01-22-traffic-analysis-exercise.pcap'  # update this path
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger('netglobe')
@@ -130,7 +139,9 @@ def get_private_geo(ip: str) -> dict | None:
 def determine_protocol_ek(layers: dict) -> str:
     """Protocol detection for tshark ek format layer keys."""
     if 'http' in layers:
-        return 'HTTPS' if 'tls' in layers or 'ssl' in layers else 'HTTP'
+        return 'HTTPS' if ('tls' in layers or 'ssl' in layers) else 'HTTP'
+    if 'tls' in layers or 'ssl' in layers:
+        return 'HTTPS'
     if 'dns' in layers:
         return 'DNS'
     if 'icmp' in layers or 'icmpv6' in layers:
@@ -140,6 +151,179 @@ def determine_protocol_ek(layers: dict) -> str:
     if 'tcp' in layers:
         return 'TCP'
     return 'OTHER'
+
+# ── Alert / IoC Rules ────────────────────────────────────────────────────────
+#
+# 2025-01-22 – Malicious Google Authenticator ad → Latrodectus C2 infection
+# Ref: Unit42 https://x.com/Unit42_Intel/status/1882448037030584611
+#
+# Confirmed malicious:
+ALERT_IPS = {
+    '5.252.153.241',    # Latrodectus C2 – served payloads + beacon /1517096937
+    '82.221.136.26',    # authenticatoor.org – typosquat redirect (fake Google Auth)
+    '104.21.64.1',      # google-authenticator.burleson-appliance.net – malicious ad landing
+    '217.70.186.109',   # appointedtimeagriculture.com – redirect hop
+}
+
+ALERT_DOMAINS = {
+    'authenticatoor.org',                           # typosquat fake Google Authenticator
+    'google-authenticator.burleson-appliance.net',  # malicious ad landing page
+    'appointedtimeagriculture.com',                 # redirect intermediary
+}
+
+ALERT_URI_PATTERNS = [
+    '/api/file/get-file/',  # C2 file-serving endpoint on 5.252.153.241
+    '/1517096937',          # Latrodectus beacon ID
+]
+
+# ── False-positive rules (included to demonstrate FP tuning) ─────────────────
+#
+# These would alert on legitimate traffic if left active.
+# They are intentionally commented out — uncomment to see the false-positive effect.
+#
+#   FP #1 — demdex.net is Adobe Audience Manager (legitimate ad-tech).
+#             Random-looking name causes it to be flagged by overly-broad rules.
+#   'demdex.net' in ALERT_DOMAINS  →  would hit dpm.demdex.net, mscom.demdex.net
+#
+#   FP #2 — googleads.g.doubleclick.net is Google's ad-serving CDN.
+#             Appears on many blocklists but is standard browser traffic.
+#   'doubleclick.net' in ALERT_DOMAINS  →  would flag all Google ad impressions
+#
+# To activate for demonstration:
+#   ALERT_DOMAINS.add('demdex.net')
+#   ALERT_DOMAINS.add('doubleclick.net')
+
+def _domain_match(hostname: str | None, domains: set[str]) -> bool:
+    """True if hostname equals or is a subdomain of any entry in domains."""
+    if not hostname:
+        return False
+    hostname = hostname.lower().rstrip('.')
+    for d in domains:
+        if hostname == d or hostname.endswith('.' + d):
+            return True
+    return False
+
+def check_flags(flow: dict) -> bool:
+    """Return True if the flow matches any alert rule."""
+    # Known-bad IPs (src or dst)
+    if flow.get('srcIp') in ALERT_IPS or flow.get('dstIp') in ALERT_IPS:
+        log.warning(f'ALERT: bad IP  {flow.get("srcIp")} → {flow.get("dstIp")}')
+        return True
+
+    # Known-bad domains (SNI, HTTP host, reverse-DNS hostname)
+    for field in ('tlsSni', 'httpHost', 'dstHostname', 'srcHostname'):
+        if _domain_match(flow.get(field), ALERT_DOMAINS):
+            log.warning(f'ALERT: bad domain [{field}] {flow.get(field)}')
+            return True
+
+    # Known-bad URI patterns
+    uri = flow.get('httpUri') or ''
+    for pattern in ALERT_URI_PATTERNS:
+        if pattern in uri:
+            log.warning(f'ALERT: bad URI {uri[:80]}')
+            return True
+
+    return False
+
+_rdns_cache: dict[str, str | None] = {}
+
+def reverse_dns(ip: str) -> str | None:
+    if ip not in _rdns_cache:
+        try:
+            _rdns_cache[ip] = socket.gethostbyaddr(ip)[0]
+        except Exception:
+            _rdns_cache[ip] = None
+    return _rdns_cache[ip]
+
+def _search_tls_sni(obj, depth: int = 0) -> str | None:
+    """Recursively search any TLS layer structure for an SNI value."""
+    if depth > 8:
+        return None
+    if isinstance(obj, list):
+        for item in obj:
+            result = _search_tls_sni(item, depth + 1)
+            if result:
+                return result
+    elif isinstance(obj, dict):
+        for key in ('tls_handshake_extensions_server_name',
+                    'tls_tls_handshake_extensions_server_name'):
+            v = _str(obj.get(key))
+            if v:
+                return v
+        for v in obj.values():
+            if isinstance(v, (dict, list)):
+                result = _search_tls_sni(v, depth + 1)
+                if result:
+                    return result
+    return None
+
+def _first(*args):
+    """Return the first truthy value."""
+    for a in args:
+        if a:
+            return a
+    return None
+
+def _str(v) -> str | None:
+    """Coerce a value to a non-empty string, or None."""
+    if v is None:
+        return None
+    if isinstance(v, list):
+        v = v[0] if v else None
+    s = str(v).strip() if v is not None else ''
+    return s or None
+
+def _layer(layers: dict, key: str) -> dict:
+    """Get a layer, safely handling cases where tshark returns a list of records."""
+    v = layers.get(key, {})
+    if isinstance(v, list):
+        v = v[0] if v else {}
+    return v if isinstance(v, dict) else {}
+
+def extract_ports(layers: dict) -> tuple:
+    tcp = _layer(layers, 'tcp')
+    udp = _layer(layers, 'udp')
+    src = _first(tcp.get('tcp_srcport'), tcp.get('tcp_tcp_srcport'),
+                 udp.get('udp_srcport'), udp.get('udp_udp_srcport'))
+    dst = _first(tcp.get('tcp_dstport'), tcp.get('tcp_tcp_dstport'),
+                 udp.get('udp_dstport'), udp.get('udp_udp_dstport'))
+    try:
+        src = int(src) if src is not None else None
+    except (ValueError, TypeError):
+        src = None
+    try:
+        dst = int(dst) if dst is not None else None
+    except (ValueError, TypeError):
+        dst = None
+    return src, dst
+
+def extract_app_info(layers: dict) -> dict:
+    http = _layer(layers, 'http')
+    dns  = _layer(layers, 'dns')
+    info = {}
+
+    # HTTP/HTTPS application layer
+    host   = _str(_first(http.get('http_host'),                  http.get('http_http_host')))
+    uri    = _str(_first(http.get('http_request_full_uri'),       http.get('http_http_request_full_uri'),
+                         http.get('http_request_uri'),            http.get('http_http_request_uri')))
+    method = _str(_first(http.get('http_request_method'),         http.get('http_http_request_method')))
+    status = _str(_first(http.get('http_response_code'),          http.get('http_http_response_code')))
+    if host:   info['httpHost']   = host
+    if uri:    info['httpUri']    = uri
+    if method: info['httpMethod'] = method
+    if status: info['httpStatus'] = status
+
+    # DNS queries
+    qname = _str(_first(dns.get('dns_qry_name'), dns.get('dns_dns_qry_name')))
+    qtype = _str(_first(dns.get('dns_qry_type'), dns.get('dns_dns_qry_type')))
+    if qname: info['dnsQuery'] = qname
+    if qtype: info['dnsType']  = qtype
+
+    # TLS SNI — search all records recursively; only present in the ClientHello
+    sni = _search_tls_sni(layers.get('tls'))
+    if sni: info['tlsSni'] = sni
+
+    return info
 
 def parse_packet(layers: dict) -> dict | None:
     try:
@@ -176,19 +360,35 @@ def parse_packet(layers: dict) -> dict | None:
             from datetime import datetime, timezone
             ts = datetime.fromisoformat(raw_ts.replace('Z', '+00:00')).timestamp()
 
+        src_port, dst_port = extract_ports(layers)
+        app_info = extract_app_info(layers)
+
+        # Reverse DNS — prefer the public-facing IP for the hostname label.
+        # If src is private (came from our machine) the interesting host is dst, and vice versa.
+        src_is_private = get_private_geo(src_ip) is not None
+        dst_is_private = get_private_geo(dst_ip) is not None
+        src_hostname = None if src_is_private else reverse_dns(src_ip)
+        dst_hostname = None if dst_is_private else reverse_dns(dst_ip)
+
         flow = {
-            'ts':       ts,
-            'srcIp':    src_ip,
-            'dstIp':    dst_ip,
-            'srcLat':   src_geo['lat'],
-            'srcLon':   src_geo['lon'],
-            'srcCity':  src_geo['city'],
-            'dstLat':   dst_geo['lat'],
-            'dstLon':   dst_geo['lon'],
-            'dstCity':  dst_geo['city'],
-            'protocol': determine_protocol_ek(layers),
-            'bytes':    bytes_,
+            'ts':          ts,
+            'srcIp':       src_ip,
+            'dstIp':       dst_ip,
+            'srcPort':     src_port,
+            'dstPort':     dst_port,
+            'srcHostname': src_hostname,
+            'dstHostname': dst_hostname,
+            'srcLat':      src_geo['lat'],
+            'srcLon':      src_geo['lon'],
+            'srcCity':     src_geo['city'],
+            'dstLat':      dst_geo['lat'],
+            'dstLon':      dst_geo['lon'],
+            'dstCity':     dst_geo['city'],
+            'protocol':    determine_protocol_ek(layers),
+            'bytes':       bytes_,
+            **app_info,
         }
+        flow['flagged'] = check_flags(flow)
         log.info(f'PARSE: success! flow={flow}')
         return flow
 

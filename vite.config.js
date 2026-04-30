@@ -9,6 +9,13 @@ plugins: [basicSsl()],
     host: true,   // hosts on local ip, required for WebXR on mobile
     https: true,
     open: true,
+    proxy: {
+      '/ws': {
+        target: 'ws://localhost:8765',
+        ws: true,
+        rewriteWsOrigin: true,
+      },
+    },
   },
   build: {
     outDir: 'dist',

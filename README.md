@@ -1,4 +1,4 @@
-# NetGlobe — Network Traffic Visualiser
+# Network Traffic Visualiser
 
 A Babylon.js globe that maps live network traffic flows as animated bezier arcs.
 
@@ -148,7 +148,3 @@ async def ws_handler(websocket, path):
         await websocket.send(json.dumps(row_to_flow(row)))
     # ... then keep sending live flows
 ```
-
-### Filter by protocol
-Add a query param: `ws://server:8765?protocol=HTTPS`
-and check `websocket.request.path` in `ws_handler`.

@@ -13,6 +13,7 @@ import {
   Matrix,
   Mesh,
   MeshBuilder,
+  PointerEventTypes,
   Quaternion,
   Scene,
   StandardMaterial,
@@ -26,8 +27,10 @@ import {
 import { polygonToCells, cellToLatLng, cellToBoundary } from 'h3-js';
 
 import { NetworkArcs, latLonToVec3 } from './NetworkArcs.js';
-import { WristHUD } from './WristHUD.js';
+import { GlobeLegend } from './GlobeLegend.js';
+import { ArcInfoPanel } from './ArcInfoPanel.js';
 import { ControllerInput } from '../xr/ControllerInput.js';
+import { HandInput } from '../xr/HandInput.js';
 
 const GLOBE_RADIUS = 0.35;
 const EARTH_DAY_TEX  = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r134/examples/textures/planets/earth_atmos_2048.jpg';
@@ -35,14 +38,14 @@ const EARTH_BUMP_TEX = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r134/example
 const EARTH_SPEC_TEX = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r134/examples/textures/planets/earth_specular_2048.jpg';
 
 const COUNTRIES_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-50m.json';
-const HEX_RESOLUTION = 5;
+const HEX_RESOLUTION = 4;
 const HEX_OFFSET = 0.001;
 const BORDER_OFFSET = 0.001;
 
 const HEX_COLOR = new Color3(0.73, 0.69, 0.95);
 const HEX_EMISSIVE = new Color3(0.18, 0.16, 0.28);
 const BORDER_COLOR = new Color3(0.31, 0.36, 0.67);
-const EARTH_COLOR = new Color3(0.13, 0.17, 0.43);
+const EARTH_COLOR = new Color3(0.086, 0.110, 0.259);
 const SCENE_CLEAR_COLOR = new Color4(0.02, 0.03, 0.05, 1.0);
 
 // ── Controller input tuning ────────────────────────────────────────────────
@@ -58,8 +61,10 @@ export class GlobeScene {
   #eventHandlers = {};
   #lastFrameTime = 0;
   #controllerInput = null;
+  #handInput = null;
   #backgroundRemover = null;
-  #arSessionSupported = false;
+  #legend = null;
+  #arcPanel = null;
   #arSessionActive = false;
   #grabActive = false;
   #grabHandedness = null;
@@ -69,7 +74,6 @@ export class GlobeScene {
   constructor(canvas) {
     this.#canvas = canvas;
     this.fps = 0;
-    this.wristHUD = null;
     this.xr = null;
     this.landHexMesh = null;
     this.borderLineMesh = null;
@@ -94,10 +98,13 @@ export class GlobeScene {
     });
 
     this.arcs = new NetworkArcs(this.scene, GLOBE_RADIUS, this.camera, this.globeRoot);
-    this.wristHUD = new WristHUD(this.scene);
+    this.#legend = new GlobeLegend(this.scene);
+    this.#legend.init(this.sceneRoot, this.globeRoot, GLOBE_RADIUS);
+    this.#arcPanel = new ArcInfoPanel(this.scene, this.globeRoot);
 
     this.#handleResize();
     await this.#initXR();
+    this.#setupPicking();
   }
 
   addFlow(flow) {
@@ -152,13 +159,13 @@ export class GlobeScene {
 
   #createLights() {
     const hemi = new HemisphericLight('hemiLight', new Vector3(0, 1, 0), this.scene);
-    hemi.intensity = 1.15;
-    hemi.diffuse = new Color3(0.55, 0.67, 0.88);
-    hemi.groundColor = new Color3(0.05, 0.08, 0.12);
+    hemi.intensity = 1.05;
+    hemi.diffuse = new Color3(0.50, 0.62, 0.85);
+    hemi.groundColor = new Color3(0.07, 0.08, 0.22);
 
     const dir = new DirectionalLight('dirLight', new Vector3(-0.35, -0.75, -0.45), this.scene);
-    dir.intensity = 1.35;
-    dir.diffuse = new Color3(0.95, 0.98, 1.0);
+    dir.intensity = 1.05;
+    dir.diffuse = new Color3(0.90, 0.94, 1.0);
   }
 
   #createGlobe() {
@@ -170,8 +177,8 @@ export class GlobeScene {
 
     const mat = new StandardMaterial('earthMat', this.scene);
     mat.diffuseColor = EARTH_COLOR;
-    mat.emissiveColor = new Color3(0.02, 0.05, 0.12);
-    mat.specularColor = new Color3(0.04, 0.04, 0.06);
+    mat.emissiveColor = new Color3(0.01, 0.01, 0.04);
+    mat.specularColor = new Color3(0.01, 0.01, 0.03);
     mat.backFaceCulling = false;
     mat.alpha = 1.0;
 
@@ -213,9 +220,9 @@ export class GlobeScene {
       this.scene,
     );
     const innerMat = new StandardMaterial('atmoInnerMat', this.scene);
-    innerMat.diffuseColor = new Color3(0.20, 0.55, 1.0);
-    innerMat.emissiveColor = new Color3(0.08, 0.22, 0.45);
-    innerMat.alpha = 0.12;
+    innerMat.diffuseColor = new Color3(0.15, 0.35, 0.90);
+    innerMat.emissiveColor = new Color3(0.02, 0.05, 0.12);
+    innerMat.alpha = 0.07;
     innerMat.backFaceCulling = false;
     innerMat.disableLighting = true;
     inner.material = innerMat;
@@ -227,9 +234,9 @@ export class GlobeScene {
       this.scene,
     );
     const outerMat = new StandardMaterial('atmoOuterMat', this.scene);
-    outerMat.diffuseColor = new Color3(0.20, 0.55, 1.0);
-    outerMat.emissiveColor = new Color3(0.08, 0.22, 0.45);
-    outerMat.alpha = 0.05;
+    outerMat.diffuseColor = new Color3(0.15, 0.35, 0.90);
+    outerMat.emissiveColor = new Color3(0.02, 0.05, 0.12);
+    outerMat.alpha = 0.03;
     outerMat.backFaceCulling = false;
     outerMat.disableLighting = true;
     outer.material = outerMat;
@@ -258,6 +265,12 @@ export class GlobeScene {
 
       this.arcs?.tick(dt);
       this.#controllerInput?.update();
+      const xrCam = this.#arSessionActive ? this.xr?.baseExperience?.camera : null;
+      if (xrCam) {
+        this.#legend?.update(xrCam);
+        this.#handInput?.update(xrCam);
+      }
+      this.#arcPanel?.update(xrCam ?? this.camera);
       this.scene.render();
 
       const instantaneousFps = 1 / dt;
@@ -273,24 +286,36 @@ export class GlobeScene {
 
   async #initXR() {
     try {
-      this.xr = await this.scene.createDefaultXRExperienceAsync();
+      this.xr = await this.scene.createDefaultXRExperienceAsync({
+        uiOptions: {
+          sessionMode: 'immersive-ar',
+          referenceSpaceType: 'local-floor',
+          optionalFeatures: true,
+        },
+        optionalFeatures: true,
+      });
     } catch (error) {
       console.warn('[GlobeScene] WebXR is unavailable:', error);
       return;
     }
 
-    this.wristHUD?.init(this.xr, 'right');
     this.#setupControllerInput();
     this.#loadControllerModels();
     await this.#setupPassthrough();
 
     this.xr.baseExperience.onStateChangedObservable.add((state) => {
       const inXR = state === WebXRState.IN_XR;
-      this.sceneRoot.position.z = inXR ? GLOBE_RADIUS * 1.5 : 0;
       if (inXR) {
         this.#syncPassthroughWithSession(this.xr.baseExperience.sessionManager.session);
+        this.#legend.show();
+        // Defer one frame so the XR camera has a valid tracked pose before we read it.
+        this.scene.onBeforeRenderObservable.addOnce(() => this.#placeGlobeInFrontOfUser());
       } else {
+        this.sceneRoot.position.copyFromFloats(0, 0, 0);
         this.#applyPassthrough(false);
+        this.#legend.hide();
+        this.arcs?.unpinGroup();
+        this.#arcPanel?.hide();
       }
       this.#emit('xrStateChange', inXR);
     });
@@ -353,12 +378,20 @@ export class GlobeScene {
       this.sceneRoot.position.addInPlace(delta.scale(CONTROLLER_TRANSLATE_SPEED));
     });
 
-    // AR toggle via Y button
-    this.#controllerInput.on('toggleAR', () => {
-      void this.#toggleAR();
-    });
-
     console.log('[GlobeScene] Controller input initialized');
+
+    // Hand tracking — same grab/scale/pick events, enabled alongside controllers
+    this.#handInput = new HandInput(this.xr, this.scene);
+    this.#handInput.on('scale',     ({ factor }) => {
+      currentScale = Math.max(CONTROLLER_SCALE_MIN, Math.min(CONTROLLER_SCALE_MAX, currentScale * factor));
+      this.globeRoot.scaling.scaleInPlace(factor);
+    });
+    this.#handInput.on('grabStart', (data) => this.#startGrab(data));
+    this.#handInput.on('grabMove',  (data) => this.#updateGrab(data));
+    this.#handInput.on('grabAdjust',(data) => this.#adjustGrabDistance(data));
+    this.#handInput.on('grabEnd',   (data) => this.#endGrab(data));
+    this.#handInput.on('fingerPick', ({ mesh }) => this.#selectArcMesh(mesh));
+    console.log('[GlobeScene] Hand input initialized');
   }
 
   #startGrab({ handedness, position, rotationQuaternion }) {
@@ -441,41 +474,25 @@ export class GlobeScene {
     this.sceneRoot.position.copyFrom(position.add(offsetWorld));
   }
 
-  async #toggleAR() {
-    if (!this.xr) return;
+  #placeGlobeInFrontOfUser() {
+    const camera = this.xr.baseExperience.camera;
+    if (!camera) return;
 
-    if (!this.#arSessionSupported) {
-      console.warn('[GlobeScene] AR sessions are not supported on this device.');
-      return;
-    }
+    const headPos = camera.position.clone();
 
-    const sessionManager = this.xr.baseExperience.sessionManager;
-    const targetMode = this.#arSessionActive ? 'immersive-vr' : 'immersive-ar';
+    // Flatten the camera's forward direction onto the horizontal plane so the globe
+    // spawns straight ahead regardless of whether the user is looking up or down.
+    const forward = camera.getForwardRay(1).direction.clone();
+    forward.y = 0;
+    if (forward.length() < 0.001) forward.z = 1;
+    forward.normalize();
 
-    if (sessionManager.inXRSession) {
-      await this.xr.baseExperience.exitXRAsync();
-    }
+    const distance = GLOBE_RADIUS * 3.5; // ~1.2 m — comfortable AR viewing distance
+    this.sceneRoot.position.x = headPos.x + forward.x * distance;
+    this.sceneRoot.position.y = headPos.y - 0.2; // slightly below eye level
+    this.sceneRoot.position.z = headPos.z + forward.z * distance;
 
-    try {
-      await this.xr.baseExperience.enterXRAsync(
-        targetMode,
-        'local-floor',
-        this.xr.renderTarget,
-        {
-          optionalFeatures: [
-            'local-floor',
-            'bounded-floor',
-            'hand-tracking',
-            'layers',
-            'dom-overlay',
-            'dom-screen-detail',
-            'hit-test',
-          ],
-        },
-      );
-    } catch (error) {
-      console.warn('[GlobeScene] Failed to toggle AR session:', error);
-    }
+    this.#legend?.reposition(forward);
   }
 
   async #setupPassthrough() {
@@ -486,12 +503,6 @@ export class GlobeScene {
       'latest',
     );
     this.#backgroundRemover.detach();
-
-    try {
-      this.#arSessionSupported = await this.xr.baseExperience.sessionManager.isSessionSupportedAsync('immersive-ar');
-    } catch (error) {
-      console.warn('[GlobeScene] AR session support check failed:', error);
-    }
 
     this.xr.baseExperience.sessionManager.onXRSessionInit.add((session) => {
       this.#syncPassthroughWithSession(session);
@@ -669,6 +680,63 @@ export class GlobeScene {
 
     console.log(`[GlobeScene] Built ${lines.length} border rings`);
     return mesh;
+  }
+
+  /** Show the arc info panel for a picked mesh, or hide if not an arc. */
+  #selectArcMesh(mesh) {
+    const info = this.arcs?.getGroupInfo(mesh);
+    if (info) {
+      this.arcs?.pinGroup(info._group);
+      const onDismiss = info.flagged ? () => {
+        this.arcs?.dismissAlert(info._group);
+        this.#arcPanel?.hide();
+      } : null;
+      this.#arcPanel?.show(info, info.apexLocal, onDismiss);
+    } else {
+      // Clicking empty space: close normal panels but leave alert panels open.
+      this.arcs?.unpinGroup();
+      if (!this.arcs?.hasActiveAlert) this.#arcPanel?.hide();
+    }
+  }
+
+  #setupPicking() {
+    let downX = 0;
+    let downY = 0;
+
+    // Only match arc hitboxes/tubes — bypasses the default isVisible predicate.
+    const arcPred = (mesh) => !!(mesh.isPickable && mesh.metadata?.group);
+
+    this.scene.onPointerObservable.add((pointerInfo) => {
+      if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
+        downX = pointerInfo.event?.clientX ?? 0;
+        downY = pointerInfo.event?.clientY ?? 0;
+        return;
+      }
+
+      if (pointerInfo.type !== PointerEventTypes.POINTERUP) return;
+
+      // Desktop: ignore drag gestures (ArcRotateCamera orbit).
+      const cx = pointerInfo.event?.clientX;
+      const cy = pointerInfo.event?.clientY;
+      if (cx !== undefined) {
+        if ((cx - downX) ** 2 + (cy - downY) ** 2 > 25) return; // 5 px threshold
+      }
+
+      // If Babylon's own pick (desktop cursor or XR ray) already landed on the
+      // info panel, let the GUI handle it — do not deselect.
+      if (pointerInfo.pickInfo?.pickedMesh?.metadata?.isPanel) return;
+
+      // Explicit arc-only pick using our custom predicate (finds invisible hitboxes).
+      let arcPick = null;
+      if (cx !== undefined) {
+        arcPick = this.scene.pick(cx, cy, arcPred);
+      }
+      if (!arcPick?.hit && pointerInfo.pickInfo?.ray) {
+        arcPick = this.scene.pickWithRay(pointerInfo.pickInfo.ray, arcPred);
+      }
+
+      this.#selectArcMesh(arcPick?.hit ? arcPick.pickedMesh : null);
+    });
   }
 
   #loadMaskPixels() {

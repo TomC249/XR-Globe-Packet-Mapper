@@ -21,7 +21,7 @@
 
 const RECONNECT_DELAY_MS  = 3000;
 const MOCK_MODE_DELAY_MS  = 200; // interval between mock events
-const MOCK_CITIES = [
+const MOCK_CITIES = [ //list of mock cities used randomly when no websocket is connected.
   { lat: 51.51,  lon: -0.13,   city: 'London'     },
   { lat: 40.71,  lon: -74.01,  city: 'New York'   },
   { lat: 35.68,  lon: 139.69,  city: 'Tokyo'      },
@@ -63,7 +63,7 @@ export class DataFeed {
     this.#url = url;
   }
 
-  // ── Public ────────────────────────────────────────────────────────────
+  // ── Public ────────────────────────────────────────────────────────
 
   connect() {
     this.#intentionalClose = false;
@@ -90,19 +90,19 @@ export class DataFeed {
     try {
       this.#ws = new WebSocket(this.#url);
     } catch {
-      this.#fallbackToMock();
+      this.#fallbackToMock(); //if connection refused with websocket (usually due to the python server not running) it will fall back to mock
       return;
     }
 
     this.#ws.onopen = () => {
       console.log('[DataFeed] WebSocket connected.');
-      this.#stopMock();
+      this.#stopMock(); //stops mock when connected to the websocket so no conflict happens
       this.#emit('status', 'connected');
     };
 
     this.#ws.onmessage = (event) => {
       try {
-        const flow = JSON.parse(event.data);
+        const flow = JSON.parse(event.data); //parses netglobe.db data
         this.#emit('flow', flow);
       } catch (err) {
         console.warn('[DataFeed] Bad message:', err);
@@ -122,7 +122,8 @@ export class DataFeed {
   }
 
   // ── Private: mock data ────────────────────────────────────────────────
-
+  // generates mock data whilst disconnected from the websocket. takes a list of big cities/countries
+  // portrays data flowing between big cities and local server host (manchester)
   #fallbackToMock() {
     this.#emit('status', 'disconnected');
     if (this.#mockTimer) return; // already running
@@ -152,8 +153,8 @@ export class DataFeed {
       dstLon:   dst.lon,
       srcCity:  src.city,
       dstCity:  dst.city,
-      protocol: 'TCP',  // Mock/unconnected data is uniform color
-      bytes:    Math.floor(Math.random() ** 2 * 1_000_000 + 64),
+      protocol: 'TCP', 
+      bytes:    Math.floor(Math.random() ** 2 * 1_000_000 + 64), //random amount of bytes
       ts:       Date.now() / 1000,
     };
   }

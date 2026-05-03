@@ -1,3 +1,4 @@
+// floating info panel that appears above a selected arc, tethered by a line to the arc apex
 import { MeshBuilder, Vector3, Color3 } from '@babylonjs/core';
 import {
   AdvancedDynamicTexture,
@@ -19,9 +20,9 @@ export class ArcInfoPanel {
   #globeRoot;
   #plane = null;
   #lineMesh = null;
-  #apexLocal = null;
+  #apexLocal = null;  // arc apex in globe-local space, re-transformed each frame
 
-  // Live-update text refs
+  // live-update text refs
   #srcIpVal;
   #dstIpVal;
   #hostVal;
@@ -43,6 +44,7 @@ export class ArcInfoPanel {
 
   // ── Public ──────────────────────────────────────────────────────────────────
 
+  // populate all fields and make the panel visible
   show(info, apexLocal, onDismiss = null) {
     this.#apexLocal  = apexLocal.clone();
     this.#onDismiss  = onDismiss;
@@ -50,7 +52,7 @@ export class ArcInfoPanel {
 
     this.#srcIpVal.text = info.srcIp   ?? '?';
     this.#dstIpVal.text = info.dstIp   ?? '?';
-    // Best available hostname: SNI > HTTP host > reverse DNS of dst > src > nothing
+    // best available hostname: SNI -> HTTP host -> reverse DNS -> nothing
     const bestHost = info.flows?.findLast(f => f.tlsSni)?.tlsSni
       ?? info.flows?.findLast(f => f.httpHost)?.httpHost
       ?? info.dstHostname
@@ -61,8 +63,8 @@ export class ArcInfoPanel {
     this.#protoVal.text = info.protocol ?? '?';
     this.#packetsVal.text = String(info.flowCount ?? 0);
     this.#bytesVal.text = formatBytes(info.totalBytes ?? 0);
-    
-    // Store raw data for display; start collapsed
+
+    // start raw data section collapsed
     this.#rawDataText.text = this.#formatRawData(info);
     this.#rawDataExpanded = false;
     this.#rawHeaderLabel.text = '▶ RAW DATA';
@@ -72,6 +74,49 @@ export class ArcInfoPanel {
     this.#plane.setEnabled(true);
   }
 
+  // hide the panel and remove the tether line
+  hide() {
+    this.#plane?.setEnabled(false);
+    if (this.#lineMesh) {
+      this.#lineMesh.dispose();
+      this.#lineMesh = null;
+    }
+    this.#apexLocal = null;
+  }
+
+  // billboard the panel toward the camera and update the tether line each frame
+  update(camera) {
+    if (!this.#plane?.isEnabled() || !camera || !this.#globeRoot || !this.#apexLocal) return;
+
+    // re-transform apex from globe-local -> world each frame so it follows globe rotation
+    const apexWorld = Vector3.TransformCoordinates(
+      this.#apexLocal,
+      this.#globeRoot.getWorldMatrix(),
+    );
+
+    // push panel slightly toward camera from the apex, with a small upward offset
+    const toCam = camera.position.subtract(apexWorld);
+    if (toCam.length() < 0.001) return;
+    toCam.normalize();
+
+    const panelPos = apexWorld
+      .add(toCam.scale(0.11))
+      .add(new Vector3(0, 0.055, 0));
+    this.#plane.position.copyFrom(panelPos);
+
+    // Y-axis billboard (-Z front face convention, same as GlobeLegend)
+    const flat = new Vector3(toCam.x, 0, toCam.z);
+    if (flat.length() > 0.001) {
+      flat.normalize();
+      this.#plane.rotation.y = Math.atan2(-flat.x, -flat.z);
+    }
+
+    this.#updateLine(panelPos, apexWorld);
+  }
+
+  // ── Private ─────────────────────────────────────────────────────────────────
+
+  // formats the last 6 flows as readable lines for the raw data section
   #formatRawData(info) {
     const flows = info.flows;
     if (!flows?.length) return '(no packet data)';
@@ -84,12 +129,12 @@ export class ArcInfoPanel {
       const ports = (f.srcPort != null && f.dstPort != null)
         ? ` :${f.srcPort}→:${f.dstPort}` : '';
 
-      // Protocol-specific detail — URI path for HTTP, query for DNS
+      // protocol-specific detail line - URI path for HTTP, query for DNS
       let detail = '';
       if (f.httpUri) {
         const method = f.httpMethod ? `${f.httpMethod} ` : '';
         let uri = f.httpUri;
-        // Strip scheme+host, keep just the path
+        // strip scheme and host, keep just the path
         try { uri = new URL(uri).pathname; } catch { /* leave as-is */ }
         if (uri.length > 36) uri = uri.slice(0, 33) + '…';
         detail = `\n  ${method}${uri}`;
@@ -105,47 +150,7 @@ export class ArcInfoPanel {
     return lines.join('\n');
   }
 
-  hide() {
-    this.#plane?.setEnabled(false);
-    if (this.#lineMesh) {
-      this.#lineMesh.dispose();
-      this.#lineMesh = null;
-    }
-    this.#apexLocal = null;
-  }
-
-  /** Call every frame with the active camera (desktop or XR). */
-  update(camera) {
-    if (!this.#plane?.isEnabled() || !camera || !this.#globeRoot || !this.#apexLocal) return;
-
-    // Transform stored local apex to world space each frame (globe rotates / moves).
-    const apexWorld = Vector3.TransformCoordinates(
-      this.#apexLocal,
-      this.#globeRoot.getWorldMatrix(),
-    );
-
-    // Float the panel toward the camera from the apex + slight upward offset.
-    const toCam = camera.position.subtract(apexWorld);
-    if (toCam.length() < 0.001) return;
-    toCam.normalize();
-
-    const panelPos = apexWorld
-      .add(toCam.scale(0.11))
-      .add(new Vector3(0, 0.055, 0));
-    this.#plane.position.copyFrom(panelPos);
-
-    // Y-axis billboard (−Z front face, same convention as GlobeLegend).
-    const flat = new Vector3(toCam.x, 0, toCam.z);
-    if (flat.length() > 0.001) {
-      flat.normalize();
-      this.#plane.rotation.y = Math.atan2(-flat.x, -flat.z);
-    }
-
-    this.#updateLine(panelPos, apexWorld);
-  }
-
-  // ── Private ─────────────────────────────────────────────────────────────────
-
+  // builds the panel mesh and all GUI text elements
   #buildPanel() {
     this.#plane = MeshBuilder.CreatePlane(
       'arcInfoPanel',
@@ -173,7 +178,7 @@ export class ArcInfoPanel {
     stack.paddingTopInPixels     = 14;
     bg.addControl(stack);
 
-    // Header
+    // header
     const header = new TextBlock('hdr', 'PACKET DETAILS');
     header.color      = '#ffffff4d';
     header.fontSize   = 15;
@@ -194,15 +199,15 @@ export class ArcInfoPanel {
     gap.thickness = 0;
     stack.addControl(gap);
 
-    this.#srcIpVal = this.#addRow(stack, 'SRC IP');
-    this.#dstIpVal = this.#addRow(stack, 'DST IP');
-    this.#hostVal  = this.#addRow(stack, 'HOST');
-    this.#fromVal  = this.#addRow(stack, 'FROM');
-    this.#protoVal = this.#addRow(stack, 'PROTO');
+    this.#srcIpVal   = this.#addRow(stack, 'SRC IP');
+    this.#dstIpVal   = this.#addRow(stack, 'DST IP');
+    this.#hostVal    = this.#addRow(stack, 'HOST');
+    this.#fromVal    = this.#addRow(stack, 'FROM');
+    this.#protoVal   = this.#addRow(stack, 'PROTO');
     this.#packetsVal = this.#addRow(stack, 'PACKETS');
-    this.#bytesVal = this.#addRow(stack, 'BYTES');
-    
-    // Dismiss alert button (hidden for non-alert arcs)
+    this.#bytesVal   = this.#addRow(stack, 'BYTES');
+
+    // dismiss button - only visible for flagged alert arcs
     const dismissGap = new Rectangle('dismissGap');
     dismissGap.height    = '6px';
     dismissGap.width     = '100%';
@@ -229,26 +234,26 @@ export class ArcInfoPanel {
       this.#onDismiss?.();
     });
 
-    // Raw data section
+    // collapsible raw packet data section
     const rawGap = new Rectangle('rawGap');
     rawGap.height    = '6px';
     rawGap.width     = '100%';
     rawGap.thickness = 0;
     stack.addControl(rawGap);
-    
+
     const rawDiv = new Rectangle('rawDiv');
     rawDiv.height     = '1px';
     rawDiv.width      = '100%';
     rawDiv.background = '#ffffff1a';
     rawDiv.thickness  = 0;
     stack.addControl(rawDiv);
-    
+
     const rawGap2 = new Rectangle('rawGap2');
     rawGap2.height    = '6px';
     rawGap2.width     = '100%';
     rawGap2.thickness = 0;
     stack.addControl(rawGap2);
-    
+
     const rawHeaderBg = new Rectangle('rawHdrBg');
     rawHeaderBg.height        = '24px';
     rawHeaderBg.width         = '100%';
@@ -265,6 +270,7 @@ export class ArcInfoPanel {
     this.#rawHeaderLabel.paddingLeftInPixels = 6;
     rawHeaderBg.addControl(this.#rawHeaderLabel);
 
+    // toggle raw data visibility on click
     rawHeaderBg.onPointerClickObservable.add(() => {
       this.#rawDataExpanded = !this.#rawDataExpanded;
       this.#rawHeaderLabel.text   = this.#rawDataExpanded ? '▼ RAW DATA' : '▶ RAW DATA';
@@ -285,6 +291,7 @@ export class ArcInfoPanel {
     stack.addControl(this.#rawDataText);
   }
 
+  // adds a label/value row to the stack, returns the value TextBlock for live updates
   #addRow(parent, label) {
     const row         = new StackPanel(`row_${label}`);
     row.isVertical    = false;
@@ -311,6 +318,7 @@ export class ArcInfoPanel {
     return val;
   }
 
+  // draws/updates the line from the panel down to the arc apex
   #updateLine(panelPos, apexWorld) {
     const points = [panelPos, apexWorld];
     if (this.#lineMesh) {

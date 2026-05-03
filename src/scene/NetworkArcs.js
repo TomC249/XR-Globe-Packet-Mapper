@@ -1,23 +1,22 @@
-/**
- * NetworkArcs.js — destination-grouped arc compaction
- *
- * Groups arcs by source+destination packet pair. Each group renders as:
- *   Compact:  one fat heat-colored tube (centroid of sources → dst)
- *   Expanded: per-source arcs fanned out, each with an invisible pick hitbox
- *
- * Compact → Expanded when camera zooms in (radius < globeRadius × 2)
- *           OR user taps/touches the compact tube (pinGroup sets expanded=true)
- * Expanded → Compact when camera zooms back out OR user deselects (unpinGroup)
- */
+// NetworkArcs.js - groups packet flows and renders them as arcs on the globe
+//
+// Each group (same src + dst bucket) renders as:
+//   Compact:  one heat-coloured tube (source -> dst), used when multiple flows exist
+//   Expanded: one line per flow, fanned out with a golden-angle spiral
+//
+// Arcs fade in -> hold -> fade out unless pinned (selected) or flagged (alert)
 
 import {
   MeshBuilder,
   StandardMaterial,
   Color3,
   Vector3,
+  Curve3,
 } from '@babylonjs/core';
 
-// Protocol colours — expanded per-source arcs
+// ── Colours ──────────────────────────────────────────────────────────────────
+
+// per-protocol colours used in expanded mode (these are unused as of now)
 const PROTOCOL_COLORS = {
   TCP:   new Color3(0.00, 0.90, 1.00),
   UDP:   new Color3(1.00, 0.65, 0.15),
@@ -28,7 +27,7 @@ const PROTOCOL_COLORS = {
   OTHER: new Color3(0.33, 0.43, 0.48),
 };
 
-// Heat scale for compact tube — colour by flow count (original scale)
+// heatmap for compact tubes - cyan = few packets, amber = lots
 const HEAT_SCALE = [
   { min: 1,  color: new Color3(0.00, 0.90, 1.00) },  // cyan
   { min: 3,  color: new Color3(0.40, 0.73, 0.41) },  // green
@@ -38,40 +37,40 @@ const HEAT_SCALE = [
   { min: 50, color: new Color3(1.00, 0.60, 0.00) },  // deep amber
 ];
 
-const FLAGGED_COLOR = new Color3(1.00, 0.10, 0.10);
+const FLAGGED_COLOR = new Color3(1.00, 0.10, 0.10);  // red for alert arcs
 
+// ── Constants ────────────────────────────────────────────────────────────────
 const BEZIER_SEGMENTS   = 48;
 const ARC_HEIGHT_FACTOR = 0.55;
-const MAX_FLOW_AGE      = 15.0;  // s
-const HOLD_DURATION     = 4.0;   // s
-const FADE_DURATION     = 1.5;   // s
-const MAX_GROUPS        = 80;
+const MAX_FLOW_AGE      = 15.0;  // seconds before a flow is pruned
+const HOLD_DURATION     = 4.0;   // seconds to hold at full opacity
+const FADE_DURATION     = 1.5;   // seconds to fade out
+const MAX_GROUPS        = 80;    // cap to avoid unbounded mesh growth
 
-const SPREAD_RADIUS_MAX = 0.32;
-const SPREAD_PUSH_SCALE = 3.2;
-const GOLDEN_ANGLE      = 2.399963229728653;
+const SPREAD_RADIUS_MAX    = 0.32;
+const SPREAD_PUSH_SCALE    = 3.2;
+const GOLDEN_ANGLE         = 2.399963229728653;  // irrational angle for even spiral spread
 const NORMAL_STRAND_RADIUS = 0.0016;
 const COMPACT_ARC_RADIUS   = NORMAL_STRAND_RADIUS * 1.2;
 
 export class NetworkArcs {
   #scene;
   #radius;
-  #camera;
   #parent;
 
-  #groups      = new Map(); // (src,dst,srcBucket,dstBucket) → Group
+  #groups      = new Map();  // key -> Group
   #pinnedGroup = null;
   #dirtyGroups = new Set();
 
-  constructor(scene, globeRadius, camera, parent = null) {
+  constructor(scene, globeRadius, parent = null) {
     this.#scene  = scene;
     this.#radius = globeRadius;
-    this.#camera = camera;
     this.#parent = parent;
   }
 
-  // ── Public ────────────────────────────────────────────────────────────────
+  // ── Public ───────────────────────────────────────────────────────────────────
 
+  // add a flow to the appropriate group, creating the group if needed
   addArc(flow) {
     const {
       srcLat, srcLon, dstLat, dstLon,
@@ -93,7 +92,8 @@ export class NetworkArcs {
     const dst = latLonToVec3(dstLat, dstLon, this.#radius);
     if (Vector3.Distance(src, dst) < 0.01) return;
 
-    // Group packets only when source AND destination match in the same buckets.
+    // snap to 0.25-degree grid so nearby flows share a group
+    // most packets have localhost as one endpoint so this bucket approach is needed
     const srcLatB = Math.round(srcLat * 4) / 4;
     const srcLonB = Math.round(srcLon * 4) / 4;
     const dstLatB = Math.round(dstLat * 4) / 4;
@@ -102,7 +102,7 @@ export class NetworkArcs {
 
     if (!this.#groups.has(key)) {
       if (this.#groups.size >= MAX_GROUPS) {
-        // Evict oldest non-flagged group; never evict an alert.
+        // evict oldest non-flagged group; never evict an alert
         const evictKey = [...this.#groups.entries()].find(([, g]) => !g.flagged)?.[0]
           ?? this.#groups.keys().next().value;
         this.#destroyGroup(this.#groups.get(evictKey));
@@ -113,7 +113,6 @@ export class NetworkArcs {
         flagged:   false,
         dstIp, dstCity, dstHostname, dst,
         sources:   new Map(),
-        expanded:  false,
         pinned:    false,
         apexLocal: null,
         meshes:    [],
@@ -125,14 +124,13 @@ export class NetworkArcs {
       });
     }
 
-    // Any flagged flow promotes the whole group to alert status.
+    // any flagged flow promotes the whole group to alert status
     const group = this.#groups.get(key);
     if (flagged && !group.flagged) {
       group.flagged = true;
       group.pinned  = true;
     }
 
-    // The source bucket is the same as the bucket used in the key above.
     const srcBucket = `${srcLatB.toFixed(2)},${srcLonB.toFixed(2)}`;
 
     if (!group.sources.has(srcBucket)) {
@@ -154,9 +152,10 @@ export class NetworkArcs {
     this.#dirtyGroups.add(key);
   }
 
+  // age flows, drive the fade lifecycle, and rebuild meshes when dirty
   tick(dt) {
     for (const [key, group] of this.#groups) {
-      // Age flows; alert group flows are frozen so the arc stays visible until dismissed.
+      // age flows; alert group flows are frozen so the arc stays visible until dismissed
       for (const [bucket, source] of group.sources) {
         if (!group.flagged)
           source.flows = source.flows.filter(f => { f.age += dt; return f.age < MAX_FLOW_AGE; });
@@ -194,9 +193,9 @@ export class NetworkArcs {
         }
       }
 
+      // single-flow groups use expanded (per-flow lines); multi-flow groups use compact tube
       const packetCount = group.sources.values().next().value?.flows.length ?? 0;
-      const isMergedPacketGroup = packetCount > 1;
-      const mode = (!isMergedPacketGroup || group.expanded) ? 'expanded' : 'compact';
+      const mode = packetCount > 1 ? 'compact' : 'expanded';
 
       if (this.#dirtyGroups.has(key) || mode !== group._lastMode) {
         this.#rebuildGroupMesh(group, mode);
@@ -208,11 +207,12 @@ export class NetworkArcs {
     }
   }
 
-  /** True when the currently selected group is a live alert. */
+  // returns true when the currently selected group is a live alert
   get hasActiveAlert() {
     return this.#pinnedGroup?.flagged ?? false;
   }
 
+  // total number of live flows across all groups
   get activeCount() {
     let total = 0;
     for (const g of this.#groups.values())
@@ -220,13 +220,13 @@ export class NetworkArcs {
     return total;
   }
 
-  /** Returns display info for a picked mesh (aggregate or per-source), or null. */
+  // returns display info for a picked mesh (per-source or aggregate), or null
   getGroupInfo(mesh) {
     const meta = mesh?.metadata;
     if (!meta?.group) return null;
 
     const group  = meta.group;
-    const source = meta.source; // defined only on expanded-mode hitboxes
+    const source = meta.source;  // only set on expanded-mode hitboxes
 
     if (source) {
       const totalBytes  = source.flows.reduce((s, f) => s + (f.bytes ?? 0), 0);
@@ -250,7 +250,7 @@ export class NetworkArcs {
       };
     }
 
-    // Aggregate — compact tube was clicked
+    // compact tube was picked - aggregate across all sources
     let totalFlows = 0, totalBytes = 0;
     const protoCounts = {};
     const allFlows = [];
@@ -262,17 +262,17 @@ export class NetworkArcs {
         allFlows.push(f);
       }
     }
-    const protocol   = Object.entries(protoCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'OTHER';
-    const srcCount   = group.sources.size;
-    const firstSrc   = group.sources.values().next().value;
+    const protocol = Object.entries(protoCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'OTHER';
+    const srcCount = group.sources.size;
+    const firstSrc = group.sources.values().next().value;
     return {
       _group:      group,
       flagged:     group.flagged,
-      srcIp:       srcCount === 1 ? firstSrc?.srcIp      : `${srcCount} sources`,
+      srcIp:       srcCount === 1 ? firstSrc?.srcIp       : `${srcCount} sources`,
       dstIp:       group.dstIp,
       srcHostname: srcCount === 1 ? firstSrc?.srcHostname : null,
       dstHostname: group.dstHostname ?? null,
-      srcCity:     srcCount === 1 ? firstSrc?.srcCity    : `${srcCount} origins`,
+      srcCity:     srcCount === 1 ? firstSrc?.srcCity     : `${srcCount} origins`,
       dstCity:     group.dstCity,
       protocol,
       flowCount:   totalFlows,
@@ -282,46 +282,42 @@ export class NetworkArcs {
     };
   }
 
-  /** Select a group: keep it alive and show its panel. Never expands into strands. */
+  // select a group - keeps it alive at full opacity and marks it dirty
   pinGroup(group) {
     if (!group) return;
-    // Deselect the previous group. Alert groups stay pinned; normal groups fade naturally.
+    // deselect previous group; alert groups stay pinned, normal groups fade naturally
     if (this.#pinnedGroup && this.#pinnedGroup !== group) {
       if (!this.#pinnedGroup.flagged) this.#pinnedGroup.pinned = false;
-      this.#pinnedGroup.expanded = false;
       this.#dirtyGroups.add(this.#pinnedGroup.key);
     }
     this.#pinnedGroup = group;
     group.pinned      = true;
-    // NOTE: intentionally NOT setting expanded=true — fan-out hurts performance.
     group.alpha       = 1;
     if (group.phase === 'FADE_OUT') { group.phase = 'HOLD'; group.timer = 0; }
     this.#dirtyGroups.add(group.key);
   }
 
-  /** Deselect: normal groups fade naturally; alert groups stay alive. */
+  // deselect - normal groups resume fading, alert groups stay alive
   unpinGroup() {
     if (this.#pinnedGroup) {
       if (!this.#pinnedGroup.flagged) this.#pinnedGroup.pinned = false;
-      this.#pinnedGroup.expanded = false;
       this.#dirtyGroups.add(this.#pinnedGroup.key);
       this.#pinnedGroup = null;
     }
   }
 
-  /** Dismiss an alert: remove its pinned/flagged status and let it fade out. */
+  // dismiss an alert - strips flagged/pinned status and lets the arc fade out
   dismissAlert(group) {
     if (!group) return;
-    group.flagged  = false;
-    group.pinned   = false;
-    group.expanded = false;
-    group.phase    = 'FADE_OUT';
-    group.timer    = 0;
+    group.flagged = false;
+    group.pinned  = false;
+    group.phase   = 'FADE_OUT';
+    group.timer   = 0;
     this.#dirtyGroups.add(group.key);
     if (this.#pinnedGroup === group) this.#pinnedGroup = null;
   }
 
-  // ── Private: mesh building ────────────────────────────────────────────────
+  // ── Private: mesh building ───────────────────────────────────────────────────
 
   #rebuildGroupMesh(group, mode) {
     this.#destroyGroup(group);
@@ -334,17 +330,17 @@ export class NetworkArcs {
     }
   }
 
-  /** Compact: one fat tube from source → dst, heat-colored by flow count */
+  // compact: one heat-coloured tube from source -> dst with an invisible hitbox
   #buildCompactedMesh(group) {
-    const source = group.sources.values().next().value; // always one source per group
+    const source = group.sources.values().next().value;
     if (!source) return;
 
     const flowCount = source.flows.length;
-    const centroid  = source.src; // single source position
+    const centroid  = source.src;
 
     const hasFlag = source.flows.some(f => f.flagged);
     const color   = hasFlag ? FLAGGED_COLOR : this.#heatColor(flowCount);
-    const radius  = COMPACT_ARC_RADIUS; // fixed size: 20% larger than normal strand
+    const radius  = COMPACT_ARC_RADIUS;
 
     const mid   = centroid.add(group.dst).scale(0.5);
     const chord = Vector3.Distance(centroid, group.dst);
@@ -364,12 +360,12 @@ export class NetworkArcs {
     }, this.#scene);
 
     mesh.material   = mat;
-    mesh.isPickable = false; // visual only — hitbox below handles picking
+    mesh.isPickable = false;  // visual only - hitbox below handles picking
     mesh.alpha      = group.alpha;
     if (this.#parent) mesh.parent = this.#parent;
     group.meshes.push(mesh);
 
-    // Invisible fat hitbox so XR controller rays can reliably select this arc.
+    // invisible fat hitbox so XR controller rays can reliably hit this arc
     const hitbox = MeshBuilder.CreateTube('cmpHit', {
       path:         curve,
       radius:       0.022,
@@ -383,7 +379,7 @@ export class NetworkArcs {
     group.meshes.push(hitbox);
   }
 
-  /** Expanded: one line + hitbox per individual flow, fanned out from the source */
+  // expanded: one coloured line per flow, fanned out using a golden-angle spiral
   #buildExpandedMeshes(group) {
     const source = group.sources.values().next().value;
     if (!source || source.flows.length === 0) return;
@@ -396,13 +392,15 @@ export class NetworkArcs {
     const chord = Vector3.Distance(src, dst);
     group.apexLocal = mid.normalize().scale(this.#radius + 0.005 + chord * ARC_HEIGHT_FACTOR);
 
+    // build orthonormal basis perpendicular to the chord for spreading the arcs
     const chordDir = dst.subtract(src).normalize();
-    let axisA = Vector3.Cross(chordDir, new Vector3(0, 1, 0));
-    if (axisA.lengthSquared() < 1e-6) axisA = Vector3.Cross(chordDir, new Vector3(1, 0, 0));
+    let axisA = Vector3.Cross(chordDir, Vector3.Up());
+    if (axisA.lengthSquared() < 1e-6) axisA = Vector3.Cross(chordDir, Vector3.Right());
     axisA = axisA.normalize();
     const axisB = Vector3.Cross(chordDir, axisA).normalize();
 
     source.flows.forEach((flow, i) => {
+      // spread arcs outward using a golden-angle spiral so they don't overlap
       const rank    = count > 1 ? Math.sqrt(i / (count - 1)) : 0;
       const spreadR = rank * SPREAD_RADIUS_MAX;
       const angle   = i * GOLDEN_ANGLE;
@@ -413,15 +411,7 @@ export class NetworkArcs {
       const apexR   = this.#radius + 0.005 + chord * (ARC_HEIGHT_FACTOR + spreadR * 0.22);
       const control = mid.normalize().scale(apexR).add(offsetVec.scale(SPREAD_PUSH_SCALE));
 
-      const curve = [];
-      for (let s = 0; s <= BEZIER_SEGMENTS; s++) {
-        const t = s / BEZIER_SEGMENTS, inv = 1 - t;
-        curve.push(
-          src.scale(inv * inv)
-            .add(control.scale(2 * inv * t))
-            .add(dst.scale(t * t))
-        );
-      }
+      const curve = Curve3.CreateQuadraticBezier(src, control, dst, BEZIER_SEGMENTS).getPoints();
 
       const color = flow.flagged
         ? FLAGGED_COLOR
@@ -434,6 +424,7 @@ export class NetworkArcs {
       if (this.#parent) line.parent = this.#parent;
       group.meshes.push(line);
 
+      // per-flow invisible hitbox for picking
       const hitbox = MeshBuilder.CreateTube('expHit', {
         path:         curve,
         radius:       0.020,
@@ -448,16 +439,18 @@ export class NetworkArcs {
     });
   }
 
+  // dispose all meshes and materials belonging to a group
   #destroyGroup(group) {
     for (const m of (group.meshes ?? [])) m.dispose();
     group.meshes = [];
     for (const mat of (group._mats ?? [])) mat.dispose();
     group._mats = [];
-    // Legacy field cleanup
+    // legacy field cleanup
     if (group.hitbox) { group.hitbox.dispose(); group.hitbox = null; }
     if (group._mat)   { group._mat.dispose();   group._mat   = null; }
   }
 
+  // pick a colour from the heat scale by flow count
   #heatColor(count) {
     let color = HEAT_SCALE[0].color;
     for (const step of HEAT_SCALE) { if (count >= step.min) color = step.color; }
@@ -473,8 +466,9 @@ export class NetworkArcs {
   }
 }
 
-// ── Geometry helpers ──────────────────────────────────────────────────────
+// ── Geometry helpers ─────────────────────────────────────────────────────────
 
+// converts geographic coordinates to a point on the globe surface
 export function latLonToVec3(lat, lon, radius) {
   const phi   = (90 - lat) * (Math.PI / 180);
   const theta = (lon + 180) * (Math.PI / 180);
@@ -485,20 +479,12 @@ export function latLonToVec3(lat, lon, radius) {
   );
 }
 
+// computes a quadratic bezier arc between two globe-surface points
+// the control point is pushed radially outward from the chord midpoint
 export function computeBezierCurve(p0, p2, radius, heightFactor, segments) {
   const mid         = p0.add(p2).scale(0.5);
   const chordLength = Vector3.Distance(p0, p2);
   const apexRadius  = radius + chordLength * heightFactor;
   const p1          = mid.normalize().scale(apexRadius);
-
-  const points = [];
-  for (let i = 0; i <= segments; i++) {
-    const t = i / segments, inv = 1 - t;
-    points.push(
-      p0.scale(inv * inv)
-        .add(p1.scale(2 * inv * t))
-        .add(p2.scale(t * t))
-    );
-  }
-  return points;
+  return Curve3.CreateQuadraticBezier(p0, p1, p2, segments).getPoints();
 }

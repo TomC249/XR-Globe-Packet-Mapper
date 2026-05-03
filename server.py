@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-server.py — WebSocket server for NetGlobe
+server.py — WebSocket server
 ==========================================
 Architecture:
   tshark (live capture)
      └─► TsharkReader   — subprocess reading JSON-format output
           └─► GeoIPEnricher — resolves IPs to lat/lon
                └─► Database   — persists flows to SQLite
-                    └─► WebSocketServer — broadcasts to all connected clients
+                    └─► WebSocketServer - broadcasts to all connected clients
 
 Requirements:
   pip install websockets geoip2 aiosqlite
@@ -22,12 +22,7 @@ Usage (Desktop):
 Usage (XR):
   1. Start server: python server.py
   2. Find your machine's IP address (e.g., 192.168.1.100)
-  3. In XR device browser, open: http://[machine-ip]:5173/?ws=ws://[machine-ip]:8765
-     Example: http://192.168.1.100:5173/?ws=ws://192.168.1.100:8765
-  
-  The ?ws= query parameter tells the client to use a specific WebSocket server
-  instead of localhost. This is necessary because XR devices on different networks
-  cannot reach the localhost loopback interface of the desktop machine.
+  3. Thats it really
 """
 
 import asyncio
@@ -50,15 +45,16 @@ WS_PORT       = 8765
 DB_PATH       = Path('netglobe.db')
 GEOIP_DB_PATH = Path('GeoLite2-City.mmdb')
 TSHARK_BIN   = 'tshark'    # ensure tshark is in your PATH
-TSHARK_IFACE  = 'Ethernet'   # change to your capture interface
+TSHARK_IFACE  = 'Ethernet'   # change to your capture interface (not used really)
 TSHARK_FILTER = 'not (src net 192.168.0.0/16 or src net 10.0.0.0/8 or src net 172.16.0.0/12 or dst net 192.168.0.0/16 or dst net 10.0.0.0/8 or dst net 172.16.0.0/12)'
-PCAP_FILE = r'2025-01-22-traffic-analysis-exercise.pcap'  # update this path
+PCAP_FILE = r'2025-01-22-traffic-analysis-exercise.pcap'  # update this path when needed
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger('netglobe')
 
 # ── Database ────────────────────────────────────────────────────────────────
-def init_db():
+#initialises db
+def init_db(): 
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS flows (
@@ -130,7 +126,7 @@ def get_private_geo(ip: str) -> dict | None:
                         '172.26.', '172.27.', '172.28.', '172.29.',
                         '172.30.', '172.31.', '127.', '::1')
     if any(ip.startswith(p) for p in private_prefixes):
-        # Update these to your actual location
+        # Manchester is the location of the "local server" 
         return {'lat': 53.48, 'lon': -2.24, 'city': 'Manchester'}
     return None
 
@@ -154,15 +150,16 @@ def determine_protocol_ek(layers: dict) -> str:
 
 # ── Alert / IoC Rules ────────────────────────────────────────────────────────
 #
-# 2025-01-22 – Malicious Google Authenticator ad → Latrodectus C2 infection
+# 2025-01-22 Malicious Google Authenticator ad → Latrodectus C2 infection
+# PCAP sourced from : https://www.malware-traffic-analysis.net/2025/01/22/index.html
 # Ref: Unit42 https://x.com/Unit42_Intel/status/1882448037030584611
 #
 # Confirmed malicious:
 ALERT_IPS = {
-    '5.252.153.241',    # Latrodectus C2 – served payloads + beacon /1517096937
-    '82.221.136.26',    # authenticatoor.org – typosquat redirect (fake Google Auth)
-    '104.21.64.1',      # google-authenticator.burleson-appliance.net – malicious ad landing
-    '217.70.186.109',   # appointedtimeagriculture.com – redirect hop
+    '5.252.153.241',    # Latrodectus C2  served payloads + beacon /1517096937
+    '82.221.136.26',    # authenticatoor.org typosquat redirect (fake Google Auth i mean literally look at the name)
+    '104.21.64.1',      # google-authenticator.burleson-appliance.net malicious ad landing
+    '217.70.186.109',   # appointedtimeagriculture.com redirect hop
 }
 
 ALERT_DOMAINS = {
@@ -179,19 +176,18 @@ ALERT_URI_PATTERNS = [
 # ── False-positive rules (included to demonstrate FP tuning) ─────────────────
 #
 # These would alert on legitimate traffic if left active.
-# They are intentionally commented out — uncomment to see the false-positive effect.
 #
-#   FP #1 — demdex.net is Adobe Audience Manager (legitimate ad-tech).
+#   FP #1 demdex.net is Adobe Audience Manager (legitimate ad-tech).
 #             Random-looking name causes it to be flagged by overly-broad rules.
-#   'demdex.net' in ALERT_DOMAINS  →  would hit dpm.demdex.net, mscom.demdex.net
 #
-#   FP #2 — googleads.g.doubleclick.net is Google's ad-serving CDN.
+#   FP #2 googleads.g.doubleclick.net is Google's ad-serving CDN.
 #             Appears on many blocklists but is standard browser traffic.
 #   'doubleclick.net' in ALERT_DOMAINS  →  would flag all Google ad impressions
 #
-# To activate for demonstration:
-#   ALERT_DOMAINS.add('demdex.net')
-#   ALERT_DOMAINS.add('doubleclick.net')
+# To activate for demonstration: 
+# used in participant testing to see if they can discern false positives
+ALERT_DOMAINS.add('demdex.net')
+ALERT_DOMAINS.add('doubleclick.net')
 
 def _domain_match(hostname: str | None, domains: set[str]) -> bool:
     """True if hostname equals or is a subdomain of any entry in domains."""
@@ -227,12 +223,16 @@ def check_flags(flow: dict) -> bool:
 
 _rdns_cache: dict[str, str | None] = {}
 
-def reverse_dns(ip: str) -> str | None:
+def _gethostbyaddr(ip: str) -> str | None:
+    try:
+        return socket.gethostbyaddr(ip)[0]
+    except Exception:
+        return None
+
+async def reverse_dns(ip: str) -> str | None:
     if ip not in _rdns_cache:
-        try:
-            _rdns_cache[ip] = socket.gethostbyaddr(ip)[0]
-        except Exception:
-            _rdns_cache[ip] = None
+        loop = asyncio.get_event_loop()
+        _rdns_cache[ip] = await loop.run_in_executor(None, _gethostbyaddr, ip)
     return _rdns_cache[ip]
 
 def _search_tls_sni(obj, depth: int = 0) -> str | None:
@@ -319,7 +319,7 @@ def extract_app_info(layers: dict) -> dict:
     if qname: info['dnsQuery'] = qname
     if qtype: info['dnsType']  = qtype
 
-    # TLS SNI — search all records recursively; only present in the ClientHello
+    # TLS SNI: search all records recursively; only present in the ClientHello
     sni = _search_tls_sni(layers.get('tls'))
     if sni: info['tlsSni'] = sni
 
@@ -363,21 +363,14 @@ def parse_packet(layers: dict) -> dict | None:
         src_port, dst_port = extract_ports(layers)
         app_info = extract_app_info(layers)
 
-        # Reverse DNS — prefer the public-facing IP for the hostname label.
-        # If src is private (came from our machine) the interesting host is dst, and vice versa.
-        src_is_private = get_private_geo(src_ip) is not None
-        dst_is_private = get_private_geo(dst_ip) is not None
-        src_hostname = None if src_is_private else reverse_dns(src_ip)
-        dst_hostname = None if dst_is_private else reverse_dns(dst_ip)
-
         flow = {
             'ts':          ts,
             'srcIp':       src_ip,
             'dstIp':       dst_ip,
             'srcPort':     src_port,
             'dstPort':     dst_port,
-            'srcHostname': src_hostname,
-            'dstHostname': dst_hostname,
+            'srcHostname': None,
+            'dstHostname': None,
             'srcLat':      src_geo['lat'],
             'srcLon':      src_geo['lon'],
             'srcCity':     src_geo['city'],
@@ -448,25 +441,44 @@ async def run_tshark(db_conn, loop, pcap_file: str):
     packet_count = 0
     flow_count = 0
 
-    async for raw in proc.stdout:
-        line = raw.decode('utf-8', errors='replace').strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    buf = b''
+    while True:
+        chunk = await proc.stdout.read(65536)
+        if not chunk:
+            break
+        buf += chunk
+        lines = buf.split(b'\n')
+        buf = lines[-1]
+        for raw in lines[:-1]:
+            line = raw.decode('utf-8', errors='replace').strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
 
-        if 'layers' not in obj:
-            continue
+            if 'layers' not in obj:
+                continue
 
-        packet_count += 1
-        flow = parse_packet(obj['layers'])
-        if flow:
-            flow_count += 1
-            insert_flow(db_conn, flow)
-            await broadcast(flow)
-            log.info(f'Flow: {flow["srcIp"]} ({flow["srcCity"]}) -> {flow["dstIp"]} ({flow["dstCity"]}) [{flow["protocol"]}]')
+            packet_count += 1
+            flow = parse_packet(obj['layers'])
+            if flow:
+                # Prefer TLS SNI or HTTP Host (actual web names) for the destination hostname.
+                # Fall back to reverse DNS only if neither is present.
+                app_hostname = flow.get('tlsSni') or flow.get('httpHost')
+                src_is_private = get_private_geo(flow['srcIp']) is not None
+                dst_is_private = get_private_geo(flow['dstIp']) is not None
+                if app_hostname:
+                    flow['dstHostname'] = app_hostname
+                    flow['srcHostname'] = None
+                else:
+                    flow['srcHostname'] = None if src_is_private else await reverse_dns(flow['srcIp'])
+                    flow['dstHostname'] = None if dst_is_private else await reverse_dns(flow['dstIp'])
+                flow_count += 1
+                insert_flow(db_conn, flow)
+                await broadcast(flow)
+                log.info(f'Flow: {flow["srcIp"]} ({flow["srcCity"]}) -> {flow["dstIp"]} ({flow["dstCity"]}) [{flow["protocol"]}]')
 
     log.info(f'Done. Parsed {packet_count} packets, {flow_count} mappable flows.')
 

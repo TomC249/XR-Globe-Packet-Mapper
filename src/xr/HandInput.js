@@ -1,28 +1,22 @@
-/**
- * HandInput.js
- * WebXR hand-tracking input, mapping gestures to the same events as ControllerInput:
- *
- *  Pinch (index tip + thumb tip ≤ 2.5 cm) → grab globe  (grabStart / grabMove / grabEnd)
- *  Both hands pinching             → scale globe   (scale)
- *  Pinch while finger tip near arc → pick arc      (fingerPick)
- *
- * Uses Babylon 7's WebXRHandTracking feature + WebXRHandJoint enum.
- * Joint meshes are invisible but still position-tracked each frame.
- */
+// HandInput.js - WebXR hand tracking mapped to the same events as ControllerInput
+//
+// Pinch (index tip + thumb tip < 2.5 cm) -> grab globe  (grabStart / grabMove / grabEnd)
+// Both hands pinching                    -> scale globe  (scale)
+// Pinch near an arc                      -> pick arc     (fingerPick)
 
 import { Ray, Vector3, Quaternion, WebXRFeatureName, WebXRHandJoint } from '@babylonjs/core';
 
-const PINCH_ENGAGE    = 0.026; // m — enter pinch
-const PINCH_RELEASE   = 0.046; // m — leave pinch (hysteresis)
-const FINGER_RAY_BACK = 0.05;  // m — start ray this far behind fingertip
-const FINGER_RAY_LEN  = 0.10;  // m — total ray length
+const PINCH_ENGAGE    = 0.026;  // m - distance to enter pinch
+const PINCH_RELEASE   = 0.046;  // m - distance to exit pinch (hysteresis prevents flickering)
+const FINGER_RAY_BACK = 0.05;   // m - start ray this far behind the fingertip
+const FINGER_RAY_LEN  = 0.10;   // m - total ray length for arc picking
 
 export class HandInput {
   #xr;
   #scene;
-  #feature = null;
-  #hands   = new Map(); // handedness → HandState
-  #eventHandlers = {};
+  #feature        = null;
+  #hands          = new Map();   // handedness -> HandState
+  #eventHandlers  = {};
   #prevSeparation = null;
   #activeGrabHand = null;
 
@@ -38,10 +32,7 @@ export class HandInput {
     return this;
   }
 
-  /**
-   * Call every frame from the render loop.
-   * @param {import('@babylonjs/core').Camera} camera - active camera (for finger-pick ray)
-   */
+  // called every frame from the render loop
   update(camera) {
     if (!this.#feature || this.#hands.size === 0) return;
 
@@ -61,8 +52,9 @@ export class HandInput {
     }
   }
 
-  // ── Private ─────────────────────────────────────────────────────────────────
+  // ── Private ──────────────────────────────────────────────────────────────────
 
+  // register the Babylon hand tracking feature and set up hand added/removed callbacks
   #enable() {
     try {
       this.#feature = this.#xr.baseExperience.featuresManager.enableFeature(
@@ -70,9 +62,7 @@ export class HandInput {
         'latest',
         {
           xrInput: this.#xr.input,
-          // Hide the individual joint spheres — the default glTF hand mesh renders instead.
-          jointMeshes: { invisible: false },
-          // handMeshes left unconfigured → default Babylon glTF hand model is shown.
+          jointMeshes: { invisible: false },  // show default glTF hand mesh
         },
         true,
         true,
@@ -87,7 +77,7 @@ export class HandInput {
       this.#hands.set(handedness, {
         hand,
         handedness,
-        pinched:            false,
+        pinched:             false,
         pinchedJustPressed:  false,
         pinchedJustReleased: false,
         nearMesh: null,
@@ -106,10 +96,12 @@ export class HandInput {
     });
   }
 
+  // safe wrapper around getJointMesh - returns null if the joint isn't tracked yet
   #joint(hand, jointName) {
     try { return hand.getJointMesh(jointName); } catch { return null; }
   }
 
+  // update pinch state with hysteresis to avoid rapid flickering
   #updatePinchState(state) {
     const thumb = this.#joint(state.hand, WebXRHandJoint.THUMB_TIP);
     const index = this.#joint(state.hand, WebXRHandJoint.INDEX_FINGER_TIP);
@@ -125,6 +117,7 @@ export class HandInput {
     state.pinchedJustReleased = !state.pinched &&  prev;
   }
 
+  // get wrist position and rotation for grab events
   #getWristPose(state) {
     const wrist = this.#joint(state.hand, WebXRHandJoint.WRIST);
     if (!wrist) return null;
@@ -134,6 +127,7 @@ export class HandInput {
     };
   }
 
+  // scale from index fingertip separation ratio between frames
   #handleScale(L, R) {
     const lIndex = this.#joint(L.hand, WebXRHandJoint.INDEX_FINGER_TIP);
     const rIndex = this.#joint(R.hand, WebXRHandJoint.INDEX_FINGER_TIP);
@@ -147,15 +141,16 @@ export class HandInput {
     this.#prevSeparation = sep;
   }
 
+  // handle pinch start, move, and release; try arc pick before starting a grab
   #handleGrab(L, R, camera) {
-    // Check for new pinch start on either hand
+    // right hand takes priority for new pinches
     for (const state of [R, L]) {
       if (!state?.pinchedJustPressed || this.#activeGrabHand) continue;
 
-      // Try arc selection first: short ray from behind fingertip through tip
+      // try arc selection first - short ray from behind fingertip through tip
       if (camera && this.#tryFingerPick(state, camera)) return;
 
-      // Start globe grab
+      // start globe grab
       this.#activeGrabHand = state.handedness;
       const pose = this.#getWristPose(state);
       if (pose) this.#emit('grabStart', { handedness: state.handedness, ...pose });
@@ -179,7 +174,7 @@ export class HandInput {
     }
   }
 
-  /** Cast a short ray from the camera through the fingertip. Hit = arc selection. */
+  // cast a short ray from behind the fingertip to check for arc hits
   #tryFingerPick(state, camera) {
     const index = this.#joint(state.hand, WebXRHandJoint.INDEX_FINGER_TIP);
     if (!index) return false;

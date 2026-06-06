@@ -1,0 +1,1 @@
+import{t as e}from"./lightFragment-Db0f1ujS.js";export{e as lightFragmentWGSL};

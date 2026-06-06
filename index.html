@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Network Traffic Visualiser</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #000;
+      overflow: hidden;
+      font-family: 'Courier New', monospace;
+    }
+
+    #render-canvas {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      touch-action: none;
+    }
+
+    /* ── HUD overlay ─────────────────────────────────────────── */
+    #hud {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    #top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 24px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, transparent 100%);
+    }
+
+
+
+    #connection-status.connected    { color: #00ff9d; }
+    #connection-status.connecting   { color: #ffc400; }
+    #connection-status.disconnected { color: #ff4444; }
+
+    /* ── Stats panel (bottom-left) ───────────────────────────── */
+    #stats-panel {
+      position: fixed;
+      bottom: 24px;
+      left: 24px;
+      background: rgba(0, 0, 0, 0.6);
+      border: 1px solid rgba(0, 229, 255, 0.2);
+      border-radius: 4px;
+      padding: 14px 18px;
+      min-width: 200px;
+      pointer-events: none;
+    }
+
+    #stats-panel h3 {
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      color: rgba(0, 229, 255, 0.5);
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+      gap: 24px;
+    }
+
+    .stat-label {
+      font-size: 11px;
+      color: rgba(255,255,255,0.4);
+      letter-spacing: 0.08em;
+    }
+
+    .stat-value {
+      font-size: 13px;
+      font-weight: 700;
+      color: #ffffff;
+      letter-spacing: 0.06em;
+    }
+
+    /* ── Legend (bottom-right) ───────────────────────────────── */
+    #legend {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: rgba(0,0,0,0.6);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 4px;
+      padding: 14px 18px;
+      pointer-events: none;
+    }
+
+    #legend h3 {
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      color: rgba(255,255,255,0.3);
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+
+    .legend-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .legend-label {
+      font-size: 11px;
+      color: rgba(255,255,255,0.5);
+      letter-spacing: 0.06em;
+    }
+
+    /* ── Tooltip ─────────────────────────────────────────────── */
+    #tooltip {
+      position: fixed;
+      background: rgba(0,0,0,0.85);
+      border: 1px solid rgba(0, 229, 255, 0.4);
+      border-radius: 4px;
+      padding: 10px 14px;
+      font-size: 11px;
+      color: #fff;
+      pointer-events: none;
+      display: none;
+      z-index: 20;
+      max-width: 220px;
+      line-height: 1.7;
+    }
+  </style>
+  <script type="module" crossorigin src="/XR-Globe-Packet-Mapper/assets/index-tczK0nSc.js"></script>
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/math.scalar.functions-C4lCVkuM.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/engineStore-BLGc67yp.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/shaderStore-Dw977DTa.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/logger-DXZ19q5s.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/tools.functions-B0E-BNkY.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/dataBuffer-BmaW7JcX.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/postprocess.vertex-BdvK2lim.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/effectRenderer-DgHgnNND.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/typeStore-DUUqxwRN.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/math.vector-BzuByL7U.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/guid-C5nCbe5_.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/texture-BJj2lo0H.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/thinEngine-CBPdyqiX.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/cubemapToSphericalPolynomial-D7WvJV3t.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/tools-TcH1JimO.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/dumpTools-CXheHawS.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/envTextureLoader-CF_F9jNM.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/dds-DxaQEnQ9.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/iesTextureLoader-DxzBlVmB.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/exrTextureLoader-FdHFzzbr.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/basisTextureLoader-BfPqiL4W.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/ddsTextureLoader-oSzBm6eH.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/hdrTextureLoader-C6znpbz_.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/ktxTextureLoader-D3mcSv82.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/tgaTextureLoader-CHOe2FGM.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/mesh.vertexData.functions-CfEOK0bM.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/sceneUboDeclaration-DjQeatqD.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/backgroundUboDeclaration-BXJMBcOR.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/clipPlaneFragment-CGyUD0Zd.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/clipPlaneFragmentDeclaration-B1azhEJc.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fogFragment-DHsBd1GN.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fogFragmentDeclaration-QYXFhRxV.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/helperFunctions-Cs35sAMQ.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/imageProcessingDeclaration-C0CDfsuh.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/imageProcessingFunctions-R67Rk2OJ.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lightFragment-CrlT6u2j.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lightFragmentDeclaration-D2AZ0s64.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lightUboDeclaration-D-lhwveb.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/ltcHelperFunctions-Bnwy27bX.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lightsFragmentFunctions-DXTesfku.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/logDepthDeclaration-Bchv1FGt.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/logDepthFragment-CAb67byh.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/reflectionFunction-BBAOD3HU.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/shadowsFragmentFunctions-D2xtLcyP.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/background.fragment-CAD5uX2j.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bakedVertexAnimation-Dfq0IhE-.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bonesDeclaration-DCsTCT-9.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bonesVertex-DRkK2fhy.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/clipPlaneVertex-D2xAHe_s.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/clipPlaneVertexDeclaration-BXjRNxlA.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fogVertex-Dv3w70Yr.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fogVertexDeclaration-CBHp9Z7g.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/instancesDeclaration-CZ2gULKv.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/instancesVertex-wigqid0_.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lightVxFragmentDeclaration-Bbxj8XlP.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lightVxUboDeclaration-D1hL4no1.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/logDepthVertex-CCqbJgOv.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/shadowsVertex-fLYImC7F.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/background.vertex-q6TZ5Urs.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/packingFunctions-2jfgZ07V.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/shadowMapFragment-YekvImG-.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/shadowMap.fragment-CC-BW0AH.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/boundingBoxRendererUboDeclaration--EI4aUHz.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/boundingBoxRenderer.fragment-Tdteahum.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/boundingBoxRenderer.vertex-pkJc5CwM.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bumpFragment-DvV54rTZ.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bumpFragmentFunctions-COzhgV_Y.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bumpFragmentMainFunctions-DjNnqsdG.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/oitFragment-zkGUiuyQ.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/meshUboDeclaration-Gj-yBF6b.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/defaultUboDeclaration-BzpwqgBY.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/mainUVVaryingDeclaration-CeTsejFO.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/default.fragment-CA3sAIK3.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bumpVertex-GWhPWwkl.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/samplerVertexImplementation-m9JUwfPq.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/morphTargetsVertex-ClcH-zuY.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/morphTargetsVertexDeclaration-xvT3ZP-Z.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/morphTargetsVertexGlobal-BIIsomI-.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/morphTargetsVertexGlobalDeclaration-B2dmcBTj.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/pointCloudVertex-CB-_J_iP.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/vertexColorMixing-B7z1-OBU.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/default.vertex-CphEISu0.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/gaussianSplatting.vertex-DyUpa7vX.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/gaussianSplatting.fragment-COGKWM4b.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/geometry.vertex-eoMH8VCn.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/sprites.fragment-BR-sb9oc.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/kernelBlurVaryingDeclaration-DMr41DZ0.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/kernelBlur.fragment-BEzu6Fup.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/kernelBlur.vertex-B5KosIA1.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/line.vertex-DCSCLOSV.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/shadowMapVertexMetric-DqtbSj46.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/shadowMap.vertex-CAhdlF-L.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/geometry.fragment-CGp5mPt2.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/harmonicsFunctions-Yj500tjV.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/hdrFilteringFunctions-DWMaJEAj.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/pbrBRDFFunctions-Dyh_-r6u.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/pbr.fragment-DD05-l_v.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/pbr.vertex-CrQMUntX.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/depth.vertex-BThJFTKE.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/shadowMapFragmentSoftTransparentShadow-DfWAShUO.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/anaglyph.fragment-x0IVpQSl.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bilateralBlur.fragment-DAVjYxa4.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bilateralBlurQuality.fragment-DHVyCnvY.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/blackAndWhite.fragment-CY90ToXw.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bloomMerge.fragment-BANzda2m.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/chromaticAberration.fragment-D8tAU9xa.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/circleOfConfusion.fragment-zzEVMj0h.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/color.fragment-_IHaevIi.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/color.vertex-DAZ8RUBs.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/colorCorrection.fragment-CnZrR3Ad.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/convolution.fragment-B49JO5hc.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/copyTextureToTexture.fragment-BtAssjUy.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/depth.fragment-DshXHTLp.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/depthBoxBlur.fragment-DOfmw9Qg.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/depthOfFieldMerge.fragment-D89UyjFr.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/displayPass.fragment-DfpEIvRu.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/extractHighlights.fragment-BP7ztLZq.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/filter.fragment-BDQkvdpV.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fluidRenderingBilateralBlur.fragment-DaphJTBz.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fluidRenderingParticleDepth.fragment-836Pvz8L.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fluidRenderingParticleDepth.vertex-DauPUAMn.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fluidRenderingParticleDiffuse.fragment-DwO_ylPE.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fluidRenderingParticleThickness.fragment-ChC34iF1.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fluidRenderingParticleThickness.vertex-Cuf55MKK.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fluidRenderingRender.fragment-D4AWniJL.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fluidRenderingStandardBlur.fragment-DUa8KfJt.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fxaa.fragment-BdssWN2a.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fxaa.vertex-B-EApQLY.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/glowBlurPostProcess.fragment-BtcWx38o.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/glowMapGeneration.fragment-CKEW6lZb.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/glowMapGeneration.vertex-MB8WRuqI.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/glowMapMerge.fragment-BRwhrPqB.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/glowMapMerge.vertex-Dy5eRhQb.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/grain.fragment-C3Sw8B78.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/greasedLine.fragment-Dd3gJonS.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/greasedLine.vertex-B1QrheAm.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/hdrFiltering.fragment-B2BUvquJ.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/hdrFiltering.vertex-CLxkStRU.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/hdrIrradianceFiltering.fragment-B0KzjYGB.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/hdrIrradianceFiltering.vertex-C3R7eY_m.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/iblCdfDebug.fragment-B0IJL6tK.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/iblCdfx.fragment-DNThqYfb.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/iblCdfy.fragment-DqAzF529.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/iblIcdf.fragment-plS09Bc0.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/iblScaledLuminance.fragment-CyBdHIGS.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/imageProcessing.fragment-Du04JvXS.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/layer.fragment-CGiPEMw6.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/layer.vertex-C81YQgAD.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lensFlare.fragment-DivzPsTs.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lensFlare.vertex-Csdy5d3W.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/line.fragment-B5xIn-HD.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lod.fragment-ZaEJD1qa.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lodCube.fragment-DWgLKWjo.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/motionBlur.fragment-JEOcsBvz.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/oitBackBlend.fragment-COmC0Jkv.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/oitFinal.fragment-n3tC18EZ.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/outline.fragment-BHfbsYJC.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/outline.vertex-va8j1Bn0.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/particles.fragment-CBsABAOW.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/particles.vertex-rN8NAckQ.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/pass.fragment-jRbG8M4D.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/passCube.fragment-B19IUBT6.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/picking.fragment-D1BbAL6d.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/picking.vertex-BAzNgHOx.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/procedural.vertex-DmuaJz03.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/rgbdDecode.fragment-BnBC3yVO.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/rgbdEncode.fragment-CpwsWAhD.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/rsmFullGlobalIllumination.fragment-cfEnP7kB.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/rsmGlobalIllumination.fragment-DdHU-wot.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/screenSpaceRayTrace-BDcUTshm.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/screenSpaceReflection2.fragment-j_lPvFG7.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/screenSpaceReflection2Blur.fragment-BE9lPsoC.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/screenSpaceReflection2BlurCombiner.fragment-BjQzM8hN.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/sharpen.fragment-e17Kd6MP.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/sprites.vertex-CBsqiFlk.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/ssao2.fragment-BowDJzjD.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/ssaoCombine.fragment-BZTKR1Z5.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/taa.fragment-BSew9x1j.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/vrDistortionCorrection.fragment-D1xW-Xvc.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bakedVertexAnimation-BtnAobRg.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/clipPlaneFragment-CVBfqn1N.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/clipPlaneFragmentDeclaration-Xvn7OB1p.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/packingFunctions-DUG1zg42.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/shadowMapFragment-9kxMjhQq.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/shadowMap.fragment-Iwguy77V.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bonesDeclaration-COkQL5Lp.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bonesVertex-DcL_yEuI.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bumpFragment-D3O_lNmZ.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bumpFragmentFunctions-CkKoQ7pg.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bumpFragmentMainFunctions-DxUlj2rL.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/clipPlaneVertex-D88OepcO.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/clipPlaneVertexDeclaration-Bi5iLLI22.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/oitFragment-FQN90clS.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fogFragmentDeclaration-bevVmJH2.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/meshUboDeclaration-BOiQWhrc.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/sceneUboDeclaration-BLK5uF-M.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/defaultUboDeclaration-DUwFKihk.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fogFragment-DKDJXo0_.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/helperFunctions-CnShv8OH.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/imageProcessingDeclaration-D2B35hdg.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/imageProcessingFunctions-DQw585n5.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lightFragment-Db0f1ujS.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lightUboDeclaration-DAZJvTVw.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/ltcHelperFunctions-CEvLUzkm.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lightsFragmentFunctions-L2Srb0uQ.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/logDepthDeclaration-BI2GPZxE.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/logDepthFragment-CY-EhT5J.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/mainUVVaryingDeclaration-B1KHg9I6.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/reflectionFunction-ocVqd7fM.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/shadowsFragmentFunctions-ISq6hqg3.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/default.fragment-2cO8_qtz.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fogVertex-DjZB2Mvn.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fogVertexDeclaration-DcTD-6CM.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/logDepthVertex-3kWBeO_F.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/gaussianSplatting.vertex-D41eyaDI.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/gaussianSplatting.fragment-CQGBIjXF.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/sprites.fragment-Cj-hwLVt.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/instancesDeclaration-Blk6-6Mm.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/instancesVertex-TvMjfaZj.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/backgroundUboDeclaration-CwQkt_iS.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/background.fragment-BK7sDPUB.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/kernelBlurVaryingDeclaration-DbGIOw5E.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/kernelBlur.fragment-8OxQI65Z.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/kernelBlur.vertex-DRbc91Sv.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bumpVertex-3mzUdB-J.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/samplerVertexImplementation-CawvQF6o.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lightVxUboDeclaration-BW4yc_1c.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/morphTargetsVertex-D161ek1L.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/morphTargetsVertexDeclaration-BJkUfBZG.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/morphTargetsVertexGlobal-CHoq9I0d.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/morphTargetsVertexGlobalDeclaration-BlvG49UW.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/shadowsVertex-DvjTr9Gu.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/vertexColorMixing-OPlaPJhG.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/default.vertex-qsS4N8al.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/harmonicsFunctions-2Uiin6iI.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/hdrFilteringFunctions-D2AweFBr.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/pbrBRDFFunctions-CJeQAHBR.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/pbr.fragment-HabG6WZa.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/shadowMapFragmentSoftTransparentShadow-DB1NIK-c.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/shadowMapVertexMetric-BkwupSEC.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/shadowMap.vertex-D5xUR3lZ.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/anaglyph.fragment-Bz_eVjjz.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/background.vertex-BcmUFcV5.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bilateralBlur.fragment-C6MBgAPX.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bilateralBlurQuality.fragment-CqLQB-Lu.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/blackAndWhite.fragment-BO-Gcs_0.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/bloomMerge.fragment-B4f97VfT.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/boundingBoxRenderer.fragment-DN2go6gu.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/boundingBoxRenderer.vertex-DMu9B8fq.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/chromaticAberration.fragment-BaJ0QOyS.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/circleOfConfusion.fragment-Cb7WhRCQ.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/color.fragment-BynAxCEo.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/color.vertex-CFIUaO8X.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/colorCorrection.fragment-4-JrnFbv.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/convolution.fragment-qo-H1cdC.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/copyTextureToTexture.fragment-CIJkhdYi.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/depth.fragment-ChKwsOlV.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/depth.vertex-Da53NWWU.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/depthBoxBlur.fragment-BSuXDBX2.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/depthOfFieldMerge.fragment-ttvrfXuo.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/displayPass.fragment-Cfb-vqCK.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/extractHighlights.fragment-CInX8vNd.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/filter.fragment-CPO_gjYN.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fluidRenderingBilateralBlur.fragment-DK6UvuBv.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fluidRenderingParticleDepth.fragment-BHEknejF.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fluidRenderingParticleDepth.vertex-B7J6xhpC.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fluidRenderingParticleDiffuse.fragment-CQJZXFOS.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fluidRenderingParticleThickness.fragment-CbT6DBKD.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fluidRenderingParticleThickness.vertex-DjdUBwE0.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fluidRenderingRender.fragment-DQvacHSG.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fluidRenderingStandardBlur.fragment-IWGaL7h4.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fxaa.fragment-CDAx16qx.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/fxaa.vertex-Db29mvZV.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/geometry.fragment-COU67wE1.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/geometry.vertex-S-8aIW1B.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/glowBlurPostProcess.fragment-D06UoSd9.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/glowMapGeneration.fragment-C8Q8a1Qo.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/glowMapGeneration.vertex-nyNTUt-h.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/glowMapMerge.fragment-iwFOiVIr.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/glowMapMerge.vertex-BeLMIXIZ.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/grain.fragment-CufEUgj-.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/greasedLine.fragment-bCHX9oIR.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/greasedLine.vertex-Ddyk6s6i.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/hdrFiltering.fragment-ZmbRbqo-.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/hdrFiltering.vertex-DA1nqIfu.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/hdrIrradianceFiltering.fragment-B15SpCOG.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/hdrIrradianceFiltering.vertex-DwcVZ6Zk.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/iblCdfDebug.fragment-U0HPhTh9.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/iblCdfx.fragment-B3QlzrXG.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/iblCdfy.fragment-BjoeQaF9.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/iblIcdf.fragment-B6jUKAC8.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/iblScaledLuminance.fragment-D2eWd8zl.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/imageProcessing.fragment-B7iq-wWr.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/layer.fragment-1jQki90D.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/layer.vertex-diATR85W.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lensFlare.fragment-DiG_fnwa.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lensFlare.vertex-UxBeDEKD.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/line.fragment-ChxIh28s.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/line.vertex-D51N1rUo.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lod.fragment-BDtKf5p_.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/lodCube.fragment-Dou48LU8.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/motionBlur.fragment-DXzVJc5F.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/oitBackBlend.fragment-qRzMv2ct.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/oitFinal.fragment-kGb9kNMF.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/outline.fragment-D9Q8YJXJ.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/outline.vertex-cugt4e_6.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/particles.fragment-Bs-ry2pA.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/particles.vertex-D7J3ONuY.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/pass.fragment-C9rU5S4e.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/passCube.fragment-AFNWt2w6.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/pbr.vertex-CyYT17_D.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/picking.fragment-CSVIlWDT.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/picking.vertex-D375XcEQ.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/postprocess.vertex-DxZ7PrZn.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/procedural.vertex-DlfvPS1l.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/rgbdDecode.fragment-BeYkbu8l.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/rgbdEncode.fragment-7ijuXaVa.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/rsmFullGlobalIllumination.fragment-BPqxRE6D.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/rsmGlobalIllumination.fragment-DhCM23qV.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/screenSpaceRayTrace-eHiDJI25.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/screenSpaceReflection2.fragment-EzEusJn7.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/screenSpaceReflection2Blur.fragment-CDmBAfme.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/screenSpaceReflection2BlurCombiner.fragment-KKTlZ3s4.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/sharpen.fragment-DEgJapJz.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/sprites.vertex-DBdR_HTm.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/ssao2.fragment-w7LvBBZm.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/ssaoCombine.fragment-0wGsUR0N.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/taa.fragment-CZCEViJ6.js">
+  <link rel="modulepreload" crossorigin href="/XR-Globe-Packet-Mapper/assets/vrDistortionCorrection.fragment-R94zA9_Y.js">
+</head>
+<body>
+  <canvas id="render-canvas"></canvas>
+
+  <div id="hud">
+    <div id="top-bar">
+      <div class="logo">Net<span>Globe</span></div>
+      <div id="connection-status" class="connecting">● CONNECTING</div>
+    </div>
+  </div>
+
+  <div id="stats-panel">
+    <h3>Live Stats</h3>
+    <div class="stat-row">
+      <span class="stat-label">Active arcs</span>
+      <span class="stat-value" id="stat-arcs">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Total flows</span>
+      <span class="stat-value" id="stat-flows">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Data rate</span>
+      <span class="stat-value" id="stat-rate">0 B/s</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">FPS</span>
+      <span class="stat-value" id="stat-fps">0</span>
+    </div>
+  </div>
+
+  <div id="legend">
+    <h3>Protocol</h3>
+    <div class="legend-item"><div class="legend-dot" style="background:#00e5ff"></div><span class="legend-label">TCP</span></div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ffa726"></div><span class="legend-label">UDP</span></div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ef5350"></div><span class="legend-label">ICMP</span></div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ab47bc"></div><span class="legend-label">DNS</span></div>
+    <div class="legend-item"><div class="legend-dot" style="background:#66bb6a"></div><span class="legend-label">HTTP/S</span></div>
+    <div class="legend-item"><div class="legend-dot" style="background:#546e7a"></div><span class="legend-label">Other</span></div>
+  </div>
+
+  <div id="tooltip"></div>
+
+</body>
+</html>

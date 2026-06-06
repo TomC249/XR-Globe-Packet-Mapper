@@ -1,0 +1,1 @@
+import{t as e}from"./background.vertex-BcmUFcV5.js";export{e as backgroundVertexShaderWGSL};

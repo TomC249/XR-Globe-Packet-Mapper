@@ -1,0 +1,2 @@
+import{t as e}from"./shaderStore-Dw977DTa.js";var t=`kernelBlurVaryingDeclaration`,n=`varying vec2 sampleCoord{X};`;e.IncludesShadersStore[t]||(e.IncludesShadersStore[t]=n);
+//# sourceMappingURL=kernelBlurVaryingDeclaration-DMr41DZ0.js.map

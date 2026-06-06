@@ -1,0 +1,1 @@
+import{t as e}from"./color.vertex-DAZ8RUBs.js";export{e as colorVertexShader};

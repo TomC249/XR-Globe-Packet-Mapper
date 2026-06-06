@@ -1,0 +1,1 @@
+import{t as e}from"./morphTargetsVertexGlobal-BIIsomI-.js";export{e as morphTargetsVertexGlobal};

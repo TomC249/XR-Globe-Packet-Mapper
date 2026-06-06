@@ -1,0 +1,1 @@
+import{t as e}from"./default.vertex-qsS4N8al.js";export{e as defaultVertexShaderWGSL};

@@ -1,0 +1,1 @@
+import{t as e}from"./background.fragment-CAD5uX2j.js";export{e as backgroundPixelShader};

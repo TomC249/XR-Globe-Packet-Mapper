@@ -1,0 +1,1 @@
+import{t as e}from"./particles.vertex-rN8NAckQ.js";export{e as particlesVertexShader};

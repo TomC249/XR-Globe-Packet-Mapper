@@ -1,0 +1,1 @@
+import{t as e}from"./ktxTextureLoader-D3mcSv82.js";export{e as _KTXTextureLoader};

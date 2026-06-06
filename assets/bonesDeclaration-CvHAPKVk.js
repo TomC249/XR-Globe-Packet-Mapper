@@ -1,0 +1,1 @@
+import{t as e}from"./bonesDeclaration-COkQL5Lp.js";export{e as bonesDeclarationWGSL};

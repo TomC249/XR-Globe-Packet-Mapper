@@ -1,0 +1,1 @@
+import{t as e}from"./sprites.vertex-DBdR_HTm.js";export{e as spritesVertexShaderWGSL};

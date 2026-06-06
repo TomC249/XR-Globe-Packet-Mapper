@@ -1,0 +1,1 @@
+import{t as e}from"./clipPlaneVertexDeclaration-Bi5iLLI22.js";export{e as clipPlaneVertexDeclarationWGSL};

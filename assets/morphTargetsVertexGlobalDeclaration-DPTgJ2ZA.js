@@ -1,0 +1,1 @@
+import{t as e}from"./morphTargetsVertexGlobalDeclaration-B2dmcBTj.js";export{e as morphTargetsVertexGlobalDeclaration};

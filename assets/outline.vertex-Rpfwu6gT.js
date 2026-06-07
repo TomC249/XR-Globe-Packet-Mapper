@@ -1,0 +1,1 @@
+import{t as e}from"./outline.vertex-BuYL_bhp.js";export{e as outlineVertexShaderWGSL};

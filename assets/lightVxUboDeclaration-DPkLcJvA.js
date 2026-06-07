@@ -1,0 +1,1 @@
+import{t as e}from"./lightVxUboDeclaration-DRWioe7B.js";export{e as lightVxUboDeclaration};

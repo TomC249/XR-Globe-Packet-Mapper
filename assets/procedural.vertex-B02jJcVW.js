@@ -1,1 +1,0 @@
-import{t as e}from"./procedural.vertex-DlfvPS1l.js";export{e as proceduralVertexShaderWGSL};

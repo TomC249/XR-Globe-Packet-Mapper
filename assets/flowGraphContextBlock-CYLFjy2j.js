@@ -1,0 +1,2 @@
+import{n as e}from"./typeStore-B5pEJDIX.js";import{f as t,o as n,t as r}from"./flowGraphBlock-CQ67Ey6r.js";var i=class extends r{constructor(e){super(e),this.userVariables=this.registerDataOutput(`userVariables`,n),this.executionId=this.registerDataOutput(`executionId`,t)}_updateOutputs(e){this.userVariables.setValue(e.userVariables,e),this.executionId.setValue(e.executionId,e)}serialize(e){super.serialize(e)}getClassName(){return`FlowGraphContextBlock`}};e(`FlowGraphContextBlock`,i);export{i as t};
+//# sourceMappingURL=flowGraphContextBlock-CYLFjy2j.js.map

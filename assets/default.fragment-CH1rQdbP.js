@@ -1,1 +1,0 @@
-import{t as e}from"./default.fragment-CA3sAIK3.js";export{e as defaultPixelShader};

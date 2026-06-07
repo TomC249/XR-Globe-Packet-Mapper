@@ -1,0 +1,2 @@
+import{n as e}from"./typeStore-B5pEJDIX.js";import{t}from"./flowGraphEventBlock-C9AG_FfG.js";var n=class extends t{constructor(){super(...arguments),this.initPriority=-1,this.type=`SceneReady`}_executeEvent(e,t){return this._execute(e),!0}_preparePendingTasks(e){}_cancelPendingTasks(e){}getClassName(){return`FlowGraphSceneReadyEventBlock`}};e(`FlowGraphSceneReadyEventBlock`,n);export{n as t};
+//# sourceMappingURL=flowGraphSceneReadyEventBlock-D4m6R-Q0.js.map

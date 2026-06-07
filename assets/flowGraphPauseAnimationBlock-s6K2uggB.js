@@ -1,0 +1,2 @@
+import{n as e}from"./typeStore-B5pEJDIX.js";import{o as t}from"./flowGraphBlock-CQ67Ey6r.js";import{t as n}from"./flowGraphExecutionBlockWithOutSignal-78y8cMdI.js";var r=class extends n{constructor(e){super(e),this.animationToPause=this.registerDataInput(`animationToPause`,t)}_execute(e){this.animationToPause.getValue(e).pause(),this.out._activateSignal(e)}getClassName(){return`FlowGraphPauseAnimationBlock`}};e(`FlowGraphPauseAnimationBlock`,r);export{r as t};
+//# sourceMappingURL=flowGraphPauseAnimationBlock-s6K2uggB.js.map

@@ -1,0 +1,1 @@
+import{t as e}from"./mesh.vertexData.functions-BaB_bIgy.js";export{e as OptimizeIndices};

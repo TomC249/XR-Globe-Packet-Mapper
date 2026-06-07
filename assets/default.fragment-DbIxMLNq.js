@@ -1,1 +1,0 @@
-import{t as e}from"./default.fragment-2cO8_qtz.js";export{e as defaultPixelShaderWGSL};

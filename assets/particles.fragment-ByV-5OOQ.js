@@ -1,1 +1,0 @@
-import{t as e}from"./particles.fragment-Bs-ry2pA.js";export{e as particlesPixelShaderWGSL};

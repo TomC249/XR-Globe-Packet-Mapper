@@ -1,0 +1,1 @@
+import{t as e}from"./sprites.vertex-DIRSv9Zj.js";export{e as spritesVertexShaderWGSL};

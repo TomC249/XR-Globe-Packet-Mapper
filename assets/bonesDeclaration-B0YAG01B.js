@@ -1,1 +1,0 @@
-import{t as e}from"./bonesDeclaration-DCsTCT-9.js";export{e as bonesDeclaration};

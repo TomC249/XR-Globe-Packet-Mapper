@@ -1,0 +1,1 @@
+import{t as e}from"./bonesVertex-DY73zrMX.js";export{e as bonesVertex};

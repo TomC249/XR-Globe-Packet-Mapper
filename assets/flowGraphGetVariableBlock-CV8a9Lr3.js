@@ -1,0 +1,2 @@
+import{n as e}from"./typeStore-B5pEJDIX.js";import{o as t,t as n}from"./flowGraphBlock-CQ67Ey6r.js";var r=class extends n{constructor(e){super(e),this.config=e,this.value=this.registerDataOutput(`value`,t,e.initialValue)}_updateOutputs(e){let t=this.config.variable;e.hasVariable(t)&&this.value.setValue(e.getVariable(t),e)}serialize(e){super.serialize(e),e.config.variable=this.config.variable}getClassName(){return`FlowGraphGetVariableBlock`}};e(`FlowGraphGetVariableBlock`,r);export{r as t};
+//# sourceMappingURL=flowGraphGetVariableBlock-CV8a9Lr3.js.map

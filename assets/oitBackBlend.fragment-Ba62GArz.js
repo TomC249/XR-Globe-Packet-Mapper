@@ -1,0 +1,3 @@
+import{t as e}from"./shaderStore-DZjcEDJh.js";var t=`oitBackBlendPixelShader`,n=`precision highp float;uniform sampler2D uBackColor;void main() {glFragColor=texelFetch(uBackColor,ivec2(gl_FragCoord.xy),0);if (glFragColor.a==0.0) { 
+discard;}}`;e.ShadersStore[t]||(e.ShadersStore[t]=n);var r={name:t,shader:n};export{r as t};
+//# sourceMappingURL=oitBackBlend.fragment-Ba62GArz.js.map

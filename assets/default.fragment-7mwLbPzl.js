@@ -1,0 +1,1 @@
+import{t as e}from"./default.fragment-BaFHYPhZ.js";export{e as defaultPixelShaderWGSL};

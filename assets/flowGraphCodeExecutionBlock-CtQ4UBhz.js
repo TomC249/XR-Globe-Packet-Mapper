@@ -1,0 +1,2 @@
+import{o as e,t}from"./flowGraphBlock-CQ67Ey6r.js";var n=class extends t{constructor(t){super(t),this.config=t,this.executionFunction=this.registerDataInput(`function`,e),this.value=this.registerDataInput(`value`,e),this.result=this.registerDataOutput(`result`,e)}_updateOutputs(e){let t=this.executionFunction.getValue(e),n=this.value.getValue(e);t&&this.result.setValue(t(n,e),e)}getClassName(){return`FlowGraphCodeExecutionBlock`}};export{n as t};
+//# sourceMappingURL=flowGraphCodeExecutionBlock-CtQ4UBhz.js.map

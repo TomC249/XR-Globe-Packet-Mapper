@@ -1,1 +1,0 @@
-import{t as e}from"./bonesVertex-DcL_yEuI.js";export{e as bonesVertexWGSL};

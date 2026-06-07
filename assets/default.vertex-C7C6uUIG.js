@@ -1,0 +1,1 @@
+import{t as e}from"./default.vertex-Ct7qggjt.js";export{e as defaultVertexShader};

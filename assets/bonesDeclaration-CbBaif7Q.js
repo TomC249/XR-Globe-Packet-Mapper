@@ -1,0 +1,1 @@
+import{t as e}from"./bonesDeclaration-CaTbAVFV.js";export{e as bonesDeclarationWGSL};

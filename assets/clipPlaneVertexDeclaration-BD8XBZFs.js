@@ -1,0 +1,20 @@
+import{t as e}from"./shaderStore-DZjcEDJh.js";var t=`clipPlaneVertexDeclaration`,n=`#ifdef CLIPPLANE
+uniform vClipPlane: vec4<f32>;varying fClipDistance: f32;
+#endif
+#ifdef CLIPPLANE2
+uniform vClipPlane2: vec4<f32>;varying fClipDistance2: f32;
+#endif
+#ifdef CLIPPLANE3
+uniform vClipPlane3: vec4<f32>;varying fClipDistance3: f32;
+#endif
+#ifdef CLIPPLANE4
+uniform vClipPlane4: vec4<f32>;varying fClipDistance4: f32;
+#endif
+#ifdef CLIPPLANE5
+uniform vClipPlane5: vec4<f32>;varying fClipDistance5: f32;
+#endif
+#ifdef CLIPPLANE6
+uniform vClipPlane6: vec4<f32>;varying fClipDistance6: f32;
+#endif
+`;e.IncludesShadersStoreWGSL[t]||(e.IncludesShadersStoreWGSL[t]=n);var r={name:t,shader:n};export{r as t};
+//# sourceMappingURL=clipPlaneVertexDeclaration-BD8XBZFs.js.map

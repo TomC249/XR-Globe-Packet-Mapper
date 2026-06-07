@@ -1,1 +1,0 @@
-import{t as e}from"./line.vertex-D51N1rUo.js";export{e as lineVertexShaderWGSL};

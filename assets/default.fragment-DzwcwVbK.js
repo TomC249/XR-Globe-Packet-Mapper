@@ -1,0 +1,1 @@
+import{t as e}from"./default.fragment-R5u_Mz55.js";export{e as defaultPixelShader};

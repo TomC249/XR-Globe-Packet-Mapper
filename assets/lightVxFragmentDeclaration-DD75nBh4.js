@@ -1,0 +1,1 @@
+import{t as e}from"./lightVxFragmentDeclaration-BXfcCRs7.js";export{e as lightVxFragmentDeclaration};

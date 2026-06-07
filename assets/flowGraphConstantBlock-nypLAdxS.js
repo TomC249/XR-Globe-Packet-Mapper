@@ -1,0 +1,2 @@
+import{n as e}from"./typeStore-B5pEJDIX.js";import{i as t,t as n,x as r}from"./flowGraphBlock-CQ67Ey6r.js";var i=class extends n{constructor(e){super(e),this.config=e,this.output=this.registerDataOutput(`output`,r(e.value))}_updateOutputs(e){this.output.setValue(this.config.value,e)}getClassName(){return`FlowGraphConstantBlock`}serialize(e={},n=t){super.serialize(e),n(`value`,this.config.value,e.config)}};e(`FlowGraphConstantBlock`,i);export{i as t};
+//# sourceMappingURL=flowGraphConstantBlock-nypLAdxS.js.map

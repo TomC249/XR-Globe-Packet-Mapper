@@ -1,0 +1,1 @@
+import{t as e}from"./bonesVertex-D51o-zEq.js";export{e as bonesVertexWGSL};

@@ -1,0 +1,1 @@
+import{t as e}from"./morphTargetsVertexDeclaration-XHL4HV28.js";export{e as morphTargetsVertexDeclarationWGSL};

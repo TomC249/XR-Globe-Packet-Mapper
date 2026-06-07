@@ -1,0 +1,1 @@
+import{t as e}from"./lightFragmentDeclaration-Cd1S39cF.js";export{e as lightFragmentDeclaration};

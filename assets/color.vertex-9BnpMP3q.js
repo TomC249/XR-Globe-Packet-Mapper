@@ -1,0 +1,1 @@
+import{t as e}from"./color.vertex-CdoHOc6Y.js";export{e as colorVertexShaderWGSL};

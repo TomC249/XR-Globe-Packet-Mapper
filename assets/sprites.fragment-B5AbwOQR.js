@@ -1,1 +1,0 @@
-import{t as e}from"./sprites.fragment-Cj-hwLVt.js";export{e as spritesPixelShaderWGSL};

@@ -1,1 +1,0 @@
-import{t as e}from"./lightUboDeclaration-D-lhwveb.js";export{e as lightUboDeclaration};

@@ -1,1 +1,0 @@
-import{t as e}from"./default.vertex-CphEISu0.js";export{e as defaultVertexShader};

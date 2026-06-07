@@ -1,0 +1,1 @@
+import{t as e}from"./particles.vertex-D3trAsoZ.js";export{e as particlesVertexShader};

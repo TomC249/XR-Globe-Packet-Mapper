@@ -1,0 +1,1 @@
+import{t as e}from"./passCube.fragment-arhbx46O.js";export{e as passCubePixelShader};

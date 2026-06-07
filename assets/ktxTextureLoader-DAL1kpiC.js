@@ -1,0 +1,1 @@
+import{t as e}from"./ktxTextureLoader-DVmj4UAX.js";export{e as _KTXTextureLoader};

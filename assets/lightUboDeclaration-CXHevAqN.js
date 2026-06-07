@@ -1,0 +1,1 @@
+import{t as e}from"./lightUboDeclaration-BT7hNfr7.js";export{e as lightUboDeclarationWGSL};
